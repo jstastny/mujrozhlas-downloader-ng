@@ -27,6 +27,17 @@ class Api(
         return response.data.map { parseSerial(it) }
     }
 
+    fun getRecentEpisodes(limit: Int = 200): List<Episode> {
+        val url = "$baseUrl/episodes".toHttpUrl().newBuilder()
+            .addQueryParameter("sort", "-since")
+            .addQueryParameter("page[limit]", limit.toString())
+            .build()
+
+        val body = fetch(url.toString())
+        val response = json.decodeFromString<JsonApiListResponse>(body)
+        return response.data.map { parseEpisode(it) }
+    }
+
     fun getSerial(uuid: String): Serial {
         val body = fetch("$baseUrl/serials/$uuid")
         val response = json.decodeFromString<JsonApiSingleResponse>(body)
@@ -80,6 +91,7 @@ class Api(
             uuid = resource.id,
             title = attrs["title"]?.jsonPrimitive?.content ?: "",
             totalParts = attrs["totalParts"]?.jsonPrimitive?.intOrNull ?: 0,
+            lastEpisodeSince = attrs["lastEpisodeSince"]?.jsonPrimitive?.contentOrNull,
         )
     }
 

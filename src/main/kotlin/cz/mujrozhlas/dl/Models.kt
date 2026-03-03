@@ -37,6 +37,7 @@ data class Serial(
     val title: String,
     val totalParts: Int,
     val episodes: List<Episode> = emptyList(),
+    val lastEpisodeSince: String? = null,
 )
 
 data class Episode(

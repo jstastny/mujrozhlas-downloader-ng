@@ -89,11 +89,14 @@ class Downloader {
         }
 
         println("  Downloading: ${outputFile.name} (${hlsLink.duration}s)")
+        downloadEpisodeByUrl(hlsLink.url, outputFile)
+    }
 
+    fun downloadEpisodeByUrl(hlsUrl: String, outputFile: File) {
         val process = ProcessBuilder(
             "ffmpeg", "-y",
             "-loglevel", "error",
-            "-i", hlsLink.url,
+            "-i", hlsUrl,
             "-c", "copy",
             "-movflags", "+faststart",
             outputFile.absolutePath,
