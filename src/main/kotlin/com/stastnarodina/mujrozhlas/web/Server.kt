@@ -1,8 +1,8 @@
-package cz.mujrozhlas.dl.web
+package com.stastnarodina.mujrozhlas.web
 
-import cz.mujrozhlas.dl.Api
-import cz.mujrozhlas.dl.Downloader
-import cz.mujrozhlas.dl.Resolver
+import com.stastnarodina.mujrozhlas.Api
+import com.stastnarodina.mujrozhlas.Downloader
+import com.stastnarodina.mujrozhlas.Resolver
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.engine.*
@@ -23,7 +23,7 @@ import org.slf4j.LoggerFactory
 import java.io.File
 import java.time.Instant
 
-private val serverLog = LoggerFactory.getLogger("cz.mujrozhlas.dl.web.Server")
+private val serverLog = LoggerFactory.getLogger("com.stastnarodina.mujrozhlas.web.Server")
 
 fun startServer(port: Int, outputDir: File, dbPath: String) {
     initDatabase(dbPath)
@@ -263,8 +263,8 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                     val result = resolver.resolve(url)
 
                     val serial = when (result) {
-                        is cz.mujrozhlas.dl.ResolvedResult.SerialResult -> result.serial
-                        is cz.mujrozhlas.dl.ResolvedResult.EpisodeResult -> {
+                        is com.stastnarodina.mujrozhlas.ResolvedResult.SerialResult -> result.serial
+                        is com.stastnarodina.mujrozhlas.ResolvedResult.EpisodeResult -> {
                             val ep = result.episode
                             if (ep.serialUuid != null) {
                                 val s = api.getSerial(ep.serialUuid)

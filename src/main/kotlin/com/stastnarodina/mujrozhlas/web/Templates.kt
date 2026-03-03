@@ -1,4 +1,4 @@
-package cz.mujrozhlas.dl.web
+package com.stastnarodina.mujrozhlas.web
 
 import kotlinx.html.*
 import java.time.Instant

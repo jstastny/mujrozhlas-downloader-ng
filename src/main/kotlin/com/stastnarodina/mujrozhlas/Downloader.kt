@@ -1,4 +1,4 @@
-package cz.mujrozhlas.dl
+package com.stastnarodina.mujrozhlas
 
 import java.io.File
 import java.time.OffsetDateTime

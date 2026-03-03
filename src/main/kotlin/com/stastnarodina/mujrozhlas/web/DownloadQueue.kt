@@ -1,6 +1,6 @@
-package cz.mujrozhlas.dl.web
+package com.stastnarodina.mujrozhlas.web
 
-import cz.mujrozhlas.dl.Downloader
+import com.stastnarodina.mujrozhlas.Downloader
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import org.jetbrains.exposed.sql.selectAll

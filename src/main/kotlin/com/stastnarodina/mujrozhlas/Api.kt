@@ -1,4 +1,4 @@
-package cz.mujrozhlas.dl
+package com.stastnarodina.mujrozhlas
 
 import kotlinx.serialization.json.*
 import okhttp3.HttpUrl.Companion.toHttpUrl

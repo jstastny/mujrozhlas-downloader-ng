@@ -1,4 +1,4 @@
-package cz.mujrozhlas.dl
+package com.stastnarodina.mujrozhlas
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable

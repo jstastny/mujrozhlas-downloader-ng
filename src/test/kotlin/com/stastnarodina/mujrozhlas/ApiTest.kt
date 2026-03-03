@@ -1,4 +1,4 @@
-package cz.mujrozhlas.dl
+package com.stastnarodina.mujrozhlas
 
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer

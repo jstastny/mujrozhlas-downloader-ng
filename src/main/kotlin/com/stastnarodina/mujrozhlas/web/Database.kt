@@ -1,4 +1,4 @@
-package cz.mujrozhlas.dl.web
+package com.stastnarodina.mujrozhlas.web
 
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.transactions.transaction

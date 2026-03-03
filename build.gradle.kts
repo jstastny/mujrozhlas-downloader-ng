@@ -5,7 +5,7 @@ plugins {
     application
 }
 
-group = "cz.mujrozhlas"
+group = "com.stastnarodina"
 version = "1.0.0"
 
 repositories {
@@ -41,7 +41,7 @@ dependencies {
 }
 
 application {
-    mainClass.set("cz.mujrozhlas.dl.MainKt")
+    mainClass.set("com.stastnarodina.mujrozhlas.MainKt")
 }
 
 tasks.shadowJar {

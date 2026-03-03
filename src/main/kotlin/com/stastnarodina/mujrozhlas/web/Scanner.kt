@@ -1,6 +1,6 @@
-package cz.mujrozhlas.dl.web
+package com.stastnarodina.mujrozhlas.web
 
-import cz.mujrozhlas.dl.Api
+import com.stastnarodina.mujrozhlas.Api
 import kotlinx.coroutines.*
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.transactions.transaction

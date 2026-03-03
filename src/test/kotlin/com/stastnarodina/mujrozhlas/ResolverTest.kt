@@ -1,4 +1,4 @@
-package cz.mujrozhlas.dl
+package com.stastnarodina.mujrozhlas
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
