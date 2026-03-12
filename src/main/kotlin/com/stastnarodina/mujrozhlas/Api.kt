@@ -81,7 +81,7 @@ class Api(
             if (!response.isSuccessful) {
                 throw RuntimeException("API request failed: ${response.code} ${response.message} for $url")
             }
-            return response.body?.string() ?: throw RuntimeException("Empty response body for $url")
+            return response.body.string()
         }
     }
 

@@ -4,7 +4,7 @@ CLI tool and web UI for downloading audio content from mujrozhlas.cz.
 
 ## Requirements
 
-- Java 21
+- Java 25
 - ffmpeg in PATH
 
 ## Build

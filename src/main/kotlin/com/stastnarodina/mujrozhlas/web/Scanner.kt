@@ -2,8 +2,9 @@ package com.stastnarodina.mujrozhlas.web
 
 import com.stastnarodina.mujrozhlas.Api
 import kotlinx.coroutines.*
-import org.jetbrains.exposed.sql.*
-import org.jetbrains.exposed.sql.transactions.transaction
+import org.jetbrains.exposed.v1.core.*
+import org.jetbrains.exposed.v1.jdbc.*
+import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import org.slf4j.LoggerFactory
 import java.time.Instant
 

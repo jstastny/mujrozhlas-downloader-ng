@@ -1,9 +1,9 @@
-FROM gradle:8-jdk21 AS build
+FROM eclipse-temurin:25-jdk-alpine AS build
 WORKDIR /app
 COPY . .
-RUN gradle shadowJar --no-daemon
+RUN ./gradlew shadowJar --no-daemon
 
-FROM eclipse-temurin:21-jre-alpine
+FROM eclipse-temurin:25-jre-alpine
 RUN apk add --no-cache ffmpeg
 COPY --from=build /app/build/libs/*-all.jar /app/app.jar
 

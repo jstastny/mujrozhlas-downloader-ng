@@ -1,7 +1,7 @@
 plugins {
-    kotlin("jvm") version "2.1.0"
-    kotlin("plugin.serialization") version "2.1.0"
-    id("com.gradleup.shadow") version "8.3.5"
+    kotlin("jvm") version "2.3.10"
+    kotlin("plugin.serialization") version "2.3.10"
+    id("com.gradleup.shadow") version "9.3.2"
     application
 }
 
@@ -12,14 +12,14 @@ repositories {
     mavenCentral()
 }
 
-val ktorVersion = "3.1.1"
-val exposedVersion = "0.58.0"
+val ktorVersion = "3.4.1"
+val exposedVersion = "1.1.1"
 
 dependencies {
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
-    implementation("com.github.ajalt.clikt:clikt:5.0.2")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.1")
+    implementation("com.squareup.okhttp3:okhttp:5.3.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.10.0")
+    implementation("com.github.ajalt.clikt:clikt:5.1.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
 
     // Ktor
     implementation("io.ktor:ktor-server-netty:$ktorVersion")
@@ -30,14 +30,14 @@ dependencies {
     implementation("org.jetbrains.exposed:exposed-core:$exposedVersion")
     implementation("org.jetbrains.exposed:exposed-jdbc:$exposedVersion")
     implementation("org.jetbrains.exposed:exposed-java-time:$exposedVersion")
-    implementation("org.xerial:sqlite-jdbc:3.47.2.0")
+    implementation("org.xerial:sqlite-jdbc:3.51.2.0")
 
     // Logging
-    implementation("ch.qos.logback:logback-classic:1.5.15")
+    implementation("ch.qos.logback:logback-classic:1.5.32")
 
     testImplementation(kotlin("test"))
-    testImplementation("io.mockk:mockk:1.13.13")
-    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    testImplementation("io.mockk:mockk:1.14.9")
+    testImplementation("com.squareup.okhttp3:mockwebserver:5.3.2")
 }
 
 application {
@@ -56,5 +56,5 @@ tasks.test {
 }
 
 kotlin {
-    jvmToolchain(21)
+    jvmToolchain(25)
 }
