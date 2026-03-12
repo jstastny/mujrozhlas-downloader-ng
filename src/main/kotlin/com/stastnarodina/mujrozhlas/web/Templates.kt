@@ -136,6 +136,14 @@ fun MAIN.dashboard(serials: List<SerialRow>, isScanning: Boolean) {
         button { type = ButtonType.submit; +"Add" }
     }
 
+    input {
+        type = InputType.search
+        id = "serial-search"
+        placeholder = "Filter serials..."
+        attributes["oninput"] = "filterSerials(this.value)"
+        style = "margin-bottom: 1rem;"
+    }
+
     div {
         id = "serial-list"
         if (serials.isEmpty()) {
@@ -144,6 +152,23 @@ fun MAIN.dashboard(serials: List<SerialRow>, isScanning: Boolean) {
             for (serial in serials) {
                 serialCard(serial)
             }
+        }
+    }
+
+    script {
+        unsafe {
+            +"""
+            function normalize(s) {
+                return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+            }
+            function filterSerials(query) {
+                var q = normalize(query);
+                document.querySelectorAll('#serial-list .serial-card').forEach(function(card) {
+                    var title = normalize(card.textContent);
+                    card.style.display = title.includes(q) ? '' : 'none';
+                });
+            }
+            """.trimIndent()
         }
     }
 }
