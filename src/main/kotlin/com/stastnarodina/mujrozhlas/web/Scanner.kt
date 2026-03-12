@@ -80,6 +80,7 @@ class Scanner(
                     it[Serials.title] = serial.title
                     it[Serials.totalParts] = serial.totalParts
                     it[Serials.lastEpisodeSince] = serial.lastEpisodeSince
+                    it[Serials.imageUrl] = serial.imageUrl
                     it[Serials.lastScanned] = Instant.now()
                 }
             } else {
@@ -87,6 +88,7 @@ class Scanner(
                     it[Serials.title] = serial.title
                     it[Serials.totalParts] = serial.totalParts
                     it[Serials.lastEpisodeSince] = serial.lastEpisodeSince
+                    it[Serials.imageUrl] = serial.imageUrl
                     it[Serials.lastScanned] = Instant.now()
                 }
             }

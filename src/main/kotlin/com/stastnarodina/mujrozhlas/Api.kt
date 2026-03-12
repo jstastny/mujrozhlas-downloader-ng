@@ -87,11 +87,14 @@ class Api(
 
     private fun parseSerial(resource: JsonApiResource): Serial {
         val attrs = json.decodeFromJsonElement<JsonObject>(resource.attributes)
+        val imageUrl = attrs["asset"]?.jsonObject?.get("url")?.jsonPrimitive?.contentOrNull
+
         return Serial(
             uuid = resource.id,
             title = attrs["title"]?.jsonPrimitive?.content ?: "",
             totalParts = attrs["totalParts"]?.jsonPrimitive?.intOrNull ?: 0,
             lastEpisodeSince = attrs["lastEpisodeSince"]?.jsonPrimitive?.contentOrNull,
+            imageUrl = imageUrl,
         )
     }
 

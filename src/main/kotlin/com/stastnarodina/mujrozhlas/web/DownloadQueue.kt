@@ -82,11 +82,11 @@ class DownloadQueue(
         val serialDir = File(outputDir, Downloader.sanitizeFilename(serialTitle))
         serialDir.mkdirs()
 
-        val filename = "%02d - %s.mp3".format(
+        val baseName = "%02d - %s".format(
             episodeData[Episodes.part],
             Downloader.sanitizeFilename(serialTitle)
         )
-        val outputFile = File(serialDir, filename)
+        val m4aFile = File(serialDir, "$baseName.m4a")
 
         transaction {
             Episodes.update({ Episodes.uuid eq episodeUuid }) {
@@ -96,14 +96,14 @@ class DownloadQueue(
 
         try {
             withContext(Dispatchers.IO) {
-                log.info("Downloading: ${episodeData[Episodes.title]} -> ${outputFile.absolutePath}")
-                downloader.downloadEpisodeByUrl(hlsUrl, outputFile)
+                log.info("Downloading: ${episodeData[Episodes.title]} -> $baseName")
+                downloader.downloadHlsToM4a(hlsUrl, m4aFile)
             }
             transaction {
                 Episodes.update({ Episodes.uuid eq episodeUuid }) {
                     it[status] = EpisodeStatus.DOWNLOADED
                     it[downloadedAt] = Instant.now()
-                    it[filePath] = outputFile.absolutePath
+                    it[filePath] = m4aFile.absolutePath
                 }
             }
             log.info("Downloaded: ${episodeData[Episodes.title]}")

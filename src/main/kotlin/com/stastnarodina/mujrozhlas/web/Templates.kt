@@ -190,13 +190,29 @@ fun MAIN.serialDetail(serial: SerialRow, episodes: List<EpisodeRow>) {
     div {
         style = "display: flex; justify-content: space-between; align-items: center;"
         h1 { +serial.title }
-        val pendingCount = episodes.count { it.status == EpisodeStatus.PENDING }
-        if (pendingCount > 0) {
-            button {
-                attributes["hx-post"] = "/serials/${serial.uuid}/approve-all"
-                attributes["hx-target"] = "#episode-list"
-                attributes["hx-swap"] = "innerHTML"
-                +"Approve All ($pendingCount)"
+        div {
+            val pendingCount = episodes.count { it.status == EpisodeStatus.PENDING }
+            val downloadedCount = episodes.count { it.status == EpisodeStatus.DOWNLOADED }
+            if (downloadedCount > 0) {
+                span {
+                    id = "m4b-status"
+                    button {
+                        attributes["class"] = "outline"
+                        attributes["hx-post"] = "/serials/${serial.uuid}/combine-m4b"
+                        attributes["hx-target"] = "#m4b-status"
+                        attributes["hx-swap"] = "innerHTML"
+                        style = "margin-right: 0.5rem;"
+                        +"Combine to M4B"
+                    }
+                }
+            }
+            if (pendingCount > 0) {
+                button {
+                    attributes["hx-post"] = "/serials/${serial.uuid}/approve-all"
+                    attributes["hx-target"] = "#episode-list"
+                    attributes["hx-swap"] = "innerHTML"
+                    +"Approve All ($pendingCount)"
+                }
             }
         }
     }

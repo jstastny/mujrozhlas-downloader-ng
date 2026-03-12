@@ -38,7 +38,10 @@ class ApiTest {
                           "id": "86006a3c-b4ec-38f6-b754-565cc18cbe17",
                           "attributes": {
                             "title": "Umberto Eco: Foucaultovo kyvadlo",
-                            "totalParts": 5
+                            "totalParts": 5,
+                            "asset": {
+                              "url": "https://portal.rozhlas.cz/images/cover.jpg"
+                            }
                           },
                           "relationships": {}
                         }
@@ -54,6 +57,7 @@ class ApiTest {
         assertEquals("Umberto Eco: Foucaultovo kyvadlo", serials[0].title)
         assertEquals("86006a3c-b4ec-38f6-b754-565cc18cbe17", serials[0].uuid)
         assertEquals(5, serials[0].totalParts)
+        assertEquals("https://portal.rozhlas.cz/images/cover.jpg", serials[0].imageUrl)
     }
 
     @Test

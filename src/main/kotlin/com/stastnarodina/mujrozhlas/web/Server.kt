@@ -1,6 +1,7 @@
 package com.stastnarodina.mujrozhlas.web
 
 import com.stastnarodina.mujrozhlas.Api
+import com.stastnarodina.mujrozhlas.DownloadedEpisode
 import com.stastnarodina.mujrozhlas.Downloader
 import com.stastnarodina.mujrozhlas.Resolver
 import io.ktor.http.*
@@ -168,6 +169,71 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                 call.respondText(html, contentType = ContentType.Text.Html)
             }
 
+            post("/serials/{uuid}/combine-m4b") {
+                val uuid = call.parameters["uuid"] ?: return@post call.respond(HttpStatusCode.BadRequest)
+
+                val serialData = transaction {
+                    Serials.selectAll().where { Serials.uuid eq uuid }.firstOrNull()
+                } ?: return@post call.respond(HttpStatusCode.NotFound, "Serial not found")
+
+                val serialTitle = serialData[Serials.title]
+                val imageUrl = serialData[Serials.imageUrl]
+
+                val episodes = transaction {
+                    Episodes.selectAll()
+                        .where { (Episodes.serialUuid eq uuid) and (Episodes.status eq EpisodeStatus.DOWNLOADED) }
+                        .orderBy(Episodes.part)
+                        .map { row ->
+                            DownloadedEpisode(
+                                title = row[Episodes.title],
+                                part = row[Episodes.part],
+                                duration = row[Episodes.duration],
+                                m4aFile = java.io.File(
+                                    java.io.File(outputDir, Downloader.sanitizeFilename(serialTitle)),
+                                    "%02d - %s.m4a".format(row[Episodes.part], Downloader.sanitizeFilename(serialTitle))
+                                ),
+                            )
+                        }
+                }
+
+                if (episodes.isEmpty()) {
+                    call.respondText("No downloaded episodes to combine", contentType = ContentType.Text.Html)
+                    return@post
+                }
+
+                // Check that all m4a files exist
+                val missing = episodes.filter { !it.m4aFile.exists() }
+                if (missing.isNotEmpty()) {
+                    val names = missing.joinToString(", ") { it.m4aFile.name }
+                    call.respondText("Missing m4a files: $names", contentType = ContentType.Text.Html)
+                    return@post
+                }
+
+                try {
+                    val serialDir = java.io.File(outputDir, Downloader.sanitizeFilename(serialTitle))
+
+                    // Download cover image
+                    val coverFile = if (imageUrl != null) {
+                        val file = java.io.File(serialDir, "cover.jpg")
+                        try {
+                            downloader.downloadFile(imageUrl, file)
+                            file
+                        } catch (e: Exception) {
+                            serverLog.warn("Cover image download failed: ${e.message}")
+                            null
+                        }
+                    } else null
+
+                    val m4bFile = java.io.File(serialDir, "${Downloader.sanitizeFilename(serialTitle)}.m4b")
+                    downloader.combineToM4b(episodes, serialTitle, coverFile, m4bFile)
+
+                    call.respondText("M4B created: ${m4bFile.name}", contentType = ContentType.Text.Html)
+                } catch (e: Exception) {
+                    serverLog.error("M4B creation failed for $serialTitle", e)
+                    call.respondText("Error: ${e.message}", contentType = ContentType.Text.Html)
+                }
+            }
+
             post("/episodes/{uuid}/approve") {
                 val uuid = call.parameters["uuid"] ?: return@post call.respond(HttpStatusCode.BadRequest)
                 transaction {
@@ -289,6 +355,7 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                                 it[title] = serial.title
                                 it[totalParts] = serial.totalParts
                                 it[lastEpisodeSince] = serial.lastEpisodeSince
+                                it[imageUrl] = serial.imageUrl
                                 it[lastScanned] = Instant.now()
                             }
                         }

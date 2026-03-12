@@ -38,6 +38,7 @@ data class Serial(
     val totalParts: Int,
     val episodes: List<Episode> = emptyList(),
     val lastEpisodeSince: String? = null,
+    val imageUrl: String? = null,
 )
 
 data class Episode(
