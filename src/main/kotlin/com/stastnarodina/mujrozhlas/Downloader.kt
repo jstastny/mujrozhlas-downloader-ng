@@ -35,7 +35,7 @@ class Downloader {
         var skipped = 0
 
         for (episode in serial.episodes) {
-            val filename = "%02d - %s.m4a".format(episode.part, sanitizeFilename(serial.title))
+            val filename = "%02d - %s.mp3".format(episode.part, sanitizeFilename(serial.title))
             val outputFile = File(serialDir, filename)
 
             if (dryRun) {
@@ -63,9 +63,9 @@ class Downloader {
     fun downloadSingleEpisode(episode: Episode, outputDir: File, dryRun: Boolean) {
         val title = episode.serialTitle ?: episode.title
         val filename = if (episode.part > 0) {
-            "%02d - %s.m4a".format(episode.part, sanitizeFilename(title))
+            "%02d - %s.mp3".format(episode.part, sanitizeFilename(title))
         } else {
-            "${sanitizeFilename(episode.title)}.m4a"
+            "${sanitizeFilename(episode.title)}.mp3"
         }
         val outputFile = File(outputDir, filename)
 
@@ -97,8 +97,8 @@ class Downloader {
             "ffmpeg", "-y",
             "-loglevel", "error",
             "-i", hlsUrl,
-            "-c", "copy",
-            "-movflags", "+faststart",
+            "-c:a", "libmp3lame",
+            "-q:a", "2",
             outputFile.absolutePath,
         )
             .redirectErrorStream(true)

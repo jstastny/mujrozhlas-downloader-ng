@@ -82,7 +82,7 @@ class DownloadQueue(
         val serialDir = File(outputDir, Downloader.sanitizeFilename(serialTitle))
         serialDir.mkdirs()
 
-        val filename = "%02d - %s.m4a".format(
+        val filename = "%02d - %s.mp3".format(
             episodeData[Episodes.part],
             Downloader.sanitizeFilename(serialTitle)
         )
