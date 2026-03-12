@@ -18,6 +18,7 @@ object Serials : Table("serials") {
     val lastEpisodeSince = varchar("last_episode_since", 64).nullable()
     val lastScanned = timestamp("last_scanned").nullable()
     val imageUrl = varchar("image_url", 2048).nullable()
+    val subscribed = bool("subscribed").default(false)
     val hidden = bool("hidden").default(false)
 
     override val primaryKey = PrimaryKey(uuid)

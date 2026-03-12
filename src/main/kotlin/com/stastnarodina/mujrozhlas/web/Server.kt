@@ -32,8 +32,8 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
     val api = Api()
     val downloader = Downloader()
     val scope = CoroutineScope(SupervisorJob())
-    val scanner = Scanner(api, scope)
     val downloadQueue = DownloadQueue(downloader, outputDir, scope)
+    val scanner = Scanner(api, scope, downloadQueue)
 
     downloader.checkFfmpeg()
     downloadQueue.start()
@@ -74,6 +74,7 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                                 pendingCount = pendingCounts[uuid]?.toInt() ?: 0,
                                 downloadedCount = downloadedCounts[uuid]?.toInt() ?: 0,
                                 lastEpisodeSince = row[Serials.lastEpisodeSince],
+                                subscribed = row[Serials.subscribed],
                             )
                         }
                         .filter { it.pendingCount > 0 || it.downloadedCount > 0 }
@@ -106,6 +107,7 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                     pendingCount = episodes.count { it.status == EpisodeStatus.PENDING },
                     downloadedCount = episodes.count { it.status == EpisodeStatus.DOWNLOADED },
                     lastEpisodeSince = serial[Serials.lastEpisodeSince],
+                    subscribed = serial[Serials.subscribed],
                 )
 
                 call.respondHtml {
@@ -122,6 +124,45 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                         it[hidden] = true
                     }
                 }
+                call.respondText("", contentType = ContentType.Text.Html)
+            }
+
+            post("/serials/{uuid}/subscribe") {
+                val uuid = call.parameters["uuid"] ?: return@post call.respond(HttpStatusCode.BadRequest)
+
+                // Mark serial as subscribed
+                transaction {
+                    Serials.update({ Serials.uuid eq uuid }) {
+                        it[subscribed] = true
+                    }
+                }
+
+                // Approve all pending episodes that have audio (duration > 0)
+                val episodeUuids = transaction {
+                    val uuids = Episodes.selectAll()
+                        .where {
+                            (Episodes.serialUuid eq uuid) and
+                            (Episodes.status eq EpisodeStatus.PENDING) and
+                            (Episodes.duration greater 0)
+                        }
+                        .map { it[Episodes.uuid] }
+
+                    Episodes.update({
+                        (Episodes.serialUuid eq uuid) and
+                        (Episodes.status eq EpisodeStatus.PENDING) and
+                        (Episodes.duration greater 0)
+                    }) {
+                        it[status] = EpisodeStatus.APPROVED
+                    }
+                    uuids
+                }
+
+                for (epUuid in episodeUuids) {
+                    downloadQueue.enqueue(epUuid)
+                }
+
+                // Redirect to serial detail page
+                call.response.header("HX-Redirect", "/serials/$uuid")
                 call.respondText("", contentType = ContentType.Text.Html)
             }
 

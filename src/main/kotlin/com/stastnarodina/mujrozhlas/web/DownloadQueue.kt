@@ -1,5 +1,6 @@
 package com.stastnarodina.mujrozhlas.web
 
+import com.stastnarodina.mujrozhlas.DownloadedEpisode
 import com.stastnarodina.mujrozhlas.Downloader
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
@@ -107,6 +108,9 @@ class DownloadQueue(
                 }
             }
             log.info("Downloaded: ${episodeData[Episodes.title]}")
+
+            // Auto-create M4B for subscribed serials
+            tryCreateM4b(episodeData[Episodes.serialUuid])
         } catch (e: Exception) {
             log.error("Download failed for ${episodeData[Episodes.title]}: ${e.message}")
             transaction {
@@ -117,6 +121,62 @@ class DownloadQueue(
             }
         } finally {
             currentDownload = null
+        }
+    }
+
+    private fun tryCreateM4b(serialUuid: String) {
+        val serialData = transaction {
+            Serials.selectAll().where { Serials.uuid eq serialUuid }.firstOrNull()
+        } ?: return
+
+        if (!serialData[Serials.subscribed]) return
+
+        val serialTitle = serialData[Serials.title]
+        val imageUrl = serialData[Serials.imageUrl]
+        val serialDir = File(outputDir, Downloader.sanitizeFilename(serialTitle))
+
+        val episodes = transaction {
+            Episodes.selectAll()
+                .where { (Episodes.serialUuid eq serialUuid) and (Episodes.status eq EpisodeStatus.DOWNLOADED) }
+                .orderBy(Episodes.part)
+                .map { row ->
+                    DownloadedEpisode(
+                        title = row[Episodes.title],
+                        part = row[Episodes.part],
+                        duration = row[Episodes.duration],
+                        m4aFile = File(serialDir, "%02d - %s.m4a".format(
+                            row[Episodes.part], Downloader.sanitizeFilename(serialTitle)
+                        )),
+                    )
+                }
+        }
+
+        if (episodes.isEmpty()) return
+
+        val missing = episodes.filter { !it.m4aFile.exists() }
+        if (missing.isNotEmpty()) {
+            log.warn("Skipping M4B creation for '$serialTitle': missing ${missing.size} m4a files")
+            return
+        }
+
+        try {
+            // Download cover image
+            val coverFile = if (imageUrl != null) {
+                val file = File(serialDir, "cover.jpg")
+                try {
+                    downloader.downloadFile(imageUrl, file)
+                    file
+                } catch (e: Exception) {
+                    log.warn("Cover image download failed for '$serialTitle': ${e.message}")
+                    null
+                }
+            } else null
+
+            val m4bFile = File(serialDir, "${Downloader.sanitizeFilename(serialTitle)}.m4b")
+            downloader.combineToM4b(episodes, serialTitle, coverFile, m4bFile)
+            log.info("M4B created: ${m4bFile.name} (${episodes.size} chapters)")
+        } catch (e: Exception) {
+            log.error("M4B creation failed for '$serialTitle': ${e.message}")
         }
     }
 }

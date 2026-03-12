@@ -11,6 +11,7 @@ import java.time.Instant
 class Scanner(
     private val api: Api,
     private val scope: CoroutineScope,
+    private val downloadQueue: DownloadQueue? = null,
 ) {
     private val log = LoggerFactory.getLogger(Scanner::class.java)
 
@@ -65,10 +66,12 @@ class Scanner(
     private fun processSerial(uuid: String) {
         val serial = api.getSerial(uuid)
 
-        val storedLastEpisodeSince = transaction {
-            Serials.selectAll().where { Serials.uuid eq uuid }.firstOrNull()?.get(Serials.lastEpisodeSince)
+        val storedSerial = transaction {
+            Serials.selectAll().where { Serials.uuid eq uuid }.firstOrNull()
         }
 
+        val storedLastEpisodeSince = storedSerial?.get(Serials.lastEpisodeSince)
+        val isSubscribed = storedSerial?.get(Serials.subscribed) ?: false
         val isNew = storedLastEpisodeSince == null
         val hasChanged = isNew || storedLastEpisodeSince != serial.lastEpisodeSince
 
@@ -110,16 +113,60 @@ class Scanner(
             transaction {
                 for (ep in newEpisodes) {
                     val hlsLink = ep.audioLinks.firstOrNull { it.variant == "hls" }
+                    val duration = hlsLink?.duration ?: 0
+                    // For subscribed serials, auto-approve episodes that have audio
+                    val initialStatus = if (isSubscribed && duration > 0) EpisodeStatus.APPROVED else EpisodeStatus.PENDING
                     Episodes.insert {
                         it[Episodes.uuid] = ep.uuid
                         it[Episodes.serialUuid] = uuid
                         it[Episodes.title] = ep.title
                         it[Episodes.part] = ep.part
-                        it[Episodes.status] = EpisodeStatus.PENDING
+                        it[Episodes.status] = initialStatus
                         it[Episodes.hlsUrl] = hlsLink?.url
-                        it[Episodes.duration] = hlsLink?.duration ?: 0
+                        it[Episodes.duration] = duration
                         it[Episodes.playableTill] = hlsLink?.playableTill
                         it[Episodes.discoveredAt] = Instant.now()
+                    }
+                    if (initialStatus == EpisodeStatus.APPROVED) {
+                        downloadQueue?.enqueue(ep.uuid)
+                    }
+                }
+            }
+        }
+
+        // For subscribed serials: check if any PENDING episodes with duration=0 now have audio
+        if (isSubscribed && downloadQueue != null) {
+            val pendingNoAudio = transaction {
+                Episodes.selectAll()
+                    .where { (Episodes.serialUuid eq uuid) and (Episodes.status eq EpisodeStatus.PENDING) and (Episodes.duration eq 0) }
+                    .map { it[Episodes.uuid] }
+                    .toSet()
+            }
+
+            if (pendingNoAudio.isNotEmpty()) {
+                val apiByUuid = apiEpisodes.associateBy { it.uuid }
+                val nowAvailable = pendingNoAudio.filter { epUuid ->
+                    val apiEp = apiByUuid[epUuid] ?: return@filter false
+                    val hlsLink = apiEp.audioLinks.firstOrNull { it.variant == "hls" }
+                    hlsLink != null && hlsLink.duration > 0
+                }
+
+                if (nowAvailable.isNotEmpty()) {
+                    log.info("Serial '${serial.title}': ${nowAvailable.size} episodes now available")
+                    transaction {
+                        for (epUuid in nowAvailable) {
+                            val apiEp = apiByUuid[epUuid]!!
+                            val hlsLink = apiEp.audioLinks.first { it.variant == "hls" }
+                            Episodes.update({ Episodes.uuid eq epUuid }) {
+                                it[Episodes.hlsUrl] = hlsLink.url
+                                it[Episodes.duration] = hlsLink.duration
+                                it[Episodes.playableTill] = hlsLink.playableTill
+                                it[Episodes.status] = EpisodeStatus.APPROVED
+                            }
+                        }
+                    }
+                    for (epUuid in nowAvailable) {
+                        downloadQueue.enqueue(epUuid)
                     }
                 }
             }

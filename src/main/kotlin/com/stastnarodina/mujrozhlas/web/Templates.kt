@@ -14,6 +14,7 @@ data class SerialRow(
     val pendingCount: Int,
     val downloadedCount: Int,
     val lastEpisodeSince: String?,
+    val subscribed: Boolean = false,
 )
 
 data class EpisodeRow(
@@ -63,6 +64,7 @@ fun HTML.layout(pageTitle: String, content: MAIN.() -> Unit) {
                 .badge-downloaded { background: #28a745; color: #fff; }
                 .badge-skipped { background: #6c757d; color: #fff; }
                 .badge-error { background: #dc3545; color: #fff; }
+                .badge-subscribed { background: #6f42c1; color: #fff; }
                 .serial-card { margin-bottom: 1rem; }
                 nav ul li { padding: 0 0.5rem; }
                 .htmx-indicator { display: none; }
@@ -155,6 +157,10 @@ fun FlowContent.serialCard(serial: SerialRow) {
                     strong { +serial.title }
                 }
                 div {
+                    if (serial.subscribed) {
+                        span("badge badge-subscribed") { +"subscribed" }
+                        +" "
+                    }
                     if (serial.pendingCount > 0) {
                         span("badge badge-pending") { +"${serial.pendingCount} pending" }
                         +" "
@@ -162,6 +168,14 @@ fun FlowContent.serialCard(serial: SerialRow) {
                     if (serial.downloadedCount > 0) {
                         span("badge badge-downloaded") { +"${serial.downloadedCount} downloaded" }
                         +" "
+                    }
+                    if (!serial.subscribed) {
+                        button {
+                            attributes["class"] = "outline"
+                            attributes["hx-post"] = "/serials/${serial.uuid}/subscribe"
+                            style = "margin-left: 0.5rem; padding: 4px 12px; font-size: 0.85em;"
+                            +"Download Series"
+                        }
                     }
                     button {
                         attributes["class"] = "outline secondary"
@@ -202,12 +216,20 @@ fun MAIN.serialDetail(serial: SerialRow, episodes: List<EpisodeRow>) {
                         attributes["hx-target"] = "#m4b-status"
                         attributes["hx-swap"] = "innerHTML"
                         style = "margin-right: 0.5rem;"
-                        +"Combine to M4B"
+                        +"Recreate M4B"
                     }
+                }
+            }
+            if (!serial.subscribed && pendingCount > 0) {
+                button {
+                    attributes["hx-post"] = "/serials/${serial.uuid}/subscribe"
+                    style = "margin-right: 0.5rem;"
+                    +"Download Series"
                 }
             }
             if (pendingCount > 0) {
                 button {
+                    attributes["class"] = "outline"
                     attributes["hx-post"] = "/serials/${serial.uuid}/approve-all"
                     attributes["hx-target"] = "#episode-list"
                     attributes["hx-swap"] = "innerHTML"
@@ -219,6 +241,7 @@ fun MAIN.serialDetail(serial: SerialRow, episodes: List<EpisodeRow>) {
 
     p {
         +"${serial.totalParts} parts total"
+        if (serial.subscribed) +" | Subscribed"
         serial.lastEpisodeSince?.let { +" | Last episode: $it" }
     }
 
