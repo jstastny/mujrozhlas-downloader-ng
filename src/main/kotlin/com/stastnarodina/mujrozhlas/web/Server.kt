@@ -36,6 +36,10 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
     val scanner = Scanner(api, scope, downloadQueue)
     val urlSigner = UrlSigner(outputDir)
 
+    // Basic auth credentials from environment (optional — if not set, no auth)
+    val authUser = System.getenv("AUTH_USER")
+    val authPass = System.getenv("AUTH_PASS")
+
     downloader.checkFfmpeg()
     downloadQueue.start()
     scanner.start()
@@ -48,7 +52,28 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
             }
         }
 
+        if (authUser != null && authPass != null) {
+            install(createApplicationPlugin("BasicAuth") {
+                onCall { call ->
+                    if (call.request.uri.startsWith("/dl/")) return@onCall
+
+                    val authHeader = call.request.headers["Authorization"]
+                    if (authHeader != null && authHeader.startsWith("Basic ")) {
+                        val decoded = java.util.Base64.getDecoder()
+                            .decode(authHeader.removePrefix("Basic "))
+                            .toString(Charsets.UTF_8)
+                        val parts = decoded.split(":", limit = 2)
+                        if (parts.size == 2 && parts[0] == authUser && parts[1] == authPass) return@onCall
+                    }
+
+                    call.response.header("WWW-Authenticate", "Basic realm=\"mujrozhlas-dl\"")
+                    call.respond(HttpStatusCode.Unauthorized)
+                }
+            })
+        }
+
         routing {
+            // Public route — presigned URLs handle their own auth
             get("/dl/{path...}") {
                 val relativePath = call.parameters.getAll("path")?.joinToString("/") ?: ""
                 val expires = call.request.queryParameters["e"]
@@ -66,6 +91,8 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                 )
                 call.respondFile(file)
             }
+
+            // All other routes require basic auth (if configured)
 
             get("/") {
                 val serials = transaction {
