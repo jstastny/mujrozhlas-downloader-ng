@@ -19,6 +19,7 @@ object Serials : Table("serials") {
     val lastScanned = timestamp("last_scanned").nullable()
     val imageUrl = varchar("image_url", 2048).nullable()
     val subscribed = bool("subscribed").default(false)
+    val m4bPath = varchar("m4b_path", 1024).nullable()
     val hidden = bool("hidden").default(false)
 
     override val primaryKey = PrimaryKey(uuid)

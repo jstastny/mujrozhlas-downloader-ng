@@ -174,6 +174,11 @@ class DownloadQueue(
 
             val m4bFile = File(serialDir, "${Downloader.sanitizeFilename(serialTitle)}.m4b")
             downloader.combineToM4b(episodes, serialTitle, coverFile, m4bFile)
+            transaction {
+                Serials.update({ Serials.uuid eq serialUuid }) {
+                    it[Serials.m4bPath] = m4bFile.absolutePath
+                }
+            }
             log.info("M4B created: ${m4bFile.name} (${episodes.size} chapters)")
         } catch (e: Exception) {
             log.error("M4B creation failed for '$serialTitle': ${e.message}")

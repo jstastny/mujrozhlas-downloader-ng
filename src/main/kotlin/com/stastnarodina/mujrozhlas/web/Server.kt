@@ -34,6 +34,7 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
     val scope = CoroutineScope(SupervisorJob())
     val downloadQueue = DownloadQueue(downloader, outputDir, scope)
     val scanner = Scanner(api, scope, downloadQueue)
+    val urlSigner = UrlSigner(outputDir)
 
     downloader.checkFfmpeg()
     downloadQueue.start()
@@ -48,6 +49,24 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
         }
 
         routing {
+            get("/dl/{path...}") {
+                val relativePath = call.parameters.getAll("path")?.joinToString("/") ?: ""
+                val expires = call.request.queryParameters["e"]
+                val signature = call.request.queryParameters["s"]
+
+                val file = urlSigner.verify(relativePath, expires, signature)
+                if (file == null) {
+                    call.respond(HttpStatusCode.Forbidden, "Invalid or expired link")
+                    return@get
+                }
+
+                call.response.header(
+                    "Content-Disposition",
+                    "attachment; filename=\"${file.name}\""
+                )
+                call.respondFile(file)
+            }
+
             get("/") {
                 val serials = transaction {
                     val pendingCounts = Episodes
@@ -67,6 +86,8 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                         .orderBy(Serials.lastEpisodeSince, SortOrder.DESC_NULLS_LAST)
                         .map { row ->
                             val uuid = row[Serials.uuid]
+                            val m4bPath = row[Serials.m4bPath]
+                            val m4bUrl = if (m4bPath != null) urlSigner.sign(File(m4bPath)) else null
                             SerialRow(
                                 uuid = uuid,
                                 title = row[Serials.title],
@@ -75,6 +96,7 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                                 downloadedCount = downloadedCounts[uuid]?.toInt() ?: 0,
                                 lastEpisodeSince = row[Serials.lastEpisodeSince],
                                 subscribed = row[Serials.subscribed],
+                                m4bDownloadUrl = m4bUrl,
                             )
                         }
                         .filter { it.pendingCount > 0 || it.downloadedCount > 0 }
@@ -97,9 +119,11 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                 val episodes = transaction {
                     Episodes.selectAll().where { Episodes.serialUuid eq uuid }
                         .orderBy(Episodes.part)
-                        .map { it.toEpisodeRow() }
+                        .map { it.toEpisodeRow(urlSigner) }
                 }
 
+                val m4bPath = serial[Serials.m4bPath]
+                val m4bUrl = if (m4bPath != null) urlSigner.sign(File(m4bPath)) else null
                 val serialRow = SerialRow(
                     uuid = serial[Serials.uuid],
                     title = serial[Serials.title],
@@ -108,6 +132,7 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                     downloadedCount = episodes.count { it.status == EpisodeStatus.DOWNLOADED },
                     lastEpisodeSince = serial[Serials.lastEpisodeSince],
                     subscribed = serial[Serials.subscribed],
+                    m4bDownloadUrl = m4bUrl,
                 )
 
                 call.respondHtml {
@@ -187,7 +212,7 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                 val episodes = transaction {
                     Episodes.selectAll().where { Episodes.serialUuid eq uuid }
                         .orderBy(Episodes.part)
-                        .map { it.toEpisodeRow() }
+                        .map { it.toEpisodeRow(urlSigner) }
                 }
 
                 val html = createHTML().table {
@@ -267,8 +292,15 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
 
                     val m4bFile = java.io.File(serialDir, "${Downloader.sanitizeFilename(serialTitle)}.m4b")
                     downloader.combineToM4b(episodes, serialTitle, coverFile, m4bFile)
+                    transaction {
+                        Serials.update({ Serials.uuid eq uuid }) {
+                            it[m4bPath] = m4bFile.absolutePath
+                        }
+                    }
 
-                    call.respondText("M4B created: ${m4bFile.name}", contentType = ContentType.Text.Html)
+                    val dlUrl = urlSigner.sign(m4bFile)
+                    val linkHtml = if (dlUrl != null) " <a href=\"$dlUrl\" download>Download</a>" else ""
+                    call.respondText("M4B created: ${m4bFile.name}$linkHtml", contentType = ContentType.Text.Html)
                 } catch (e: Exception) {
                     serverLog.error("M4B creation failed for $serialTitle", e)
                     call.respondText("Error: ${e.message}", contentType = ContentType.Text.Html)
@@ -284,7 +316,7 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                 }
                 downloadQueue.enqueue(uuid)
 
-                respondEpisodeRow(call, uuid)
+                respondEpisodeRow(call, uuid, urlSigner)
             }
 
             post("/episodes/{uuid}/skip") {
@@ -294,12 +326,12 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                         it[status] = EpisodeStatus.SKIPPED
                     }
                 }
-                respondEpisodeRow(call, uuid)
+                respondEpisodeRow(call, uuid, urlSigner)
             }
 
             get("/episodes/{uuid}/status") {
                 val uuid = call.parameters["uuid"] ?: return@get call.respond(HttpStatusCode.BadRequest)
-                respondEpisodeRow(call, uuid)
+                respondEpisodeRow(call, uuid, urlSigner)
             }
 
             post("/scan") {
@@ -347,7 +379,7 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                             )
                         }
                         .orderBy(Episodes.discoveredAt, SortOrder.DESC)
-                        .map { it.toEpisodeRow() }
+                        .map { it.toEpisodeRow(urlSigner) }
                 }
 
                 call.respondHtml {
@@ -459,9 +491,9 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
     }.start(wait = true)
 }
 
-private suspend fun respondEpisodeRow(call: ApplicationCall, uuid: String) {
+private suspend fun respondEpisodeRow(call: ApplicationCall, uuid: String, urlSigner: UrlSigner) {
     val episode = transaction {
-        Episodes.selectAll().where { Episodes.uuid eq uuid }.firstOrNull()?.toEpisodeRow()
+        Episodes.selectAll().where { Episodes.uuid eq uuid }.firstOrNull()?.toEpisodeRow(urlSigner)
     }
     if (episode == null) {
         call.respond(HttpStatusCode.NotFound)
@@ -553,7 +585,10 @@ private fun formatInstant(instant: Instant?): String {
     return formatter.format(instant)
 }
 
-private fun ResultRow.toEpisodeRow() = EpisodeRow(
+private fun ResultRow.toEpisodeRow(urlSigner: UrlSigner? = null): EpisodeRow {
+    val path = this[Episodes.filePath]
+    val dlUrl = if (path != null && urlSigner != null) urlSigner.sign(File(path)) else null
+    return EpisodeRow(
     uuid = this[Episodes.uuid],
     title = this[Episodes.title],
     part = this[Episodes.part],
@@ -563,5 +598,7 @@ private fun ResultRow.toEpisodeRow() = EpisodeRow(
     discoveredAt = this[Episodes.discoveredAt],
     downloadedAt = this[Episodes.downloadedAt],
     filePath = this[Episodes.filePath],
+    downloadUrl = dlUrl,
     errorMessage = this[Episodes.errorMessage],
 )
+}

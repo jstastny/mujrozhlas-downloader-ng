@@ -15,6 +15,7 @@ data class SerialRow(
     val downloadedCount: Int,
     val lastEpisodeSince: String?,
     val subscribed: Boolean = false,
+    val m4bDownloadUrl: String? = null,
 )
 
 data class EpisodeRow(
@@ -28,6 +29,7 @@ data class EpisodeRow(
     val downloadedAt: Instant?,
     val filePath: String?,
     val errorMessage: String?,
+    val downloadUrl: String? = null,
 )
 
 private val dateFormatter = DateTimeFormatter.ofPattern("d.M.yyyy HH:mm")
@@ -194,6 +196,13 @@ fun FlowContent.serialCard(serial: SerialRow) {
                 +"${serial.totalParts} parts total"
                 serial.lastEpisodeSince?.let { +" | Last episode: $it" }
             }
+            serial.m4bDownloadUrl?.let { url ->
+                +" "
+                a(href = url) {
+                    attributes["download"] = ""
+                    small { +"M4B" }
+                }
+            }
         }
     }
 }
@@ -243,6 +252,10 @@ fun MAIN.serialDetail(serial: SerialRow, episodes: List<EpisodeRow>) {
         +"${serial.totalParts} parts total"
         if (serial.subscribed) +" | Subscribed"
         serial.lastEpisodeSince?.let { +" | Last episode: $it" }
+        serial.m4bDownloadUrl?.let { url ->
+            +" | "
+            a(href = url) { attributes["download"] = ""; +"Download M4B" }
+        }
     }
 
     table {
@@ -319,6 +332,10 @@ fun TBODY.episodeRow(episode: EpisodeRow) {
                 }
                 EpisodeStatus.DOWNLOADED -> {
                     small { +formatInstant(episode.downloadedAt) }
+                    episode.downloadUrl?.let { url ->
+                        +" "
+                        a(href = url) { attributes["download"] = ""; +"Download" }
+                    }
                 }
                 EpisodeStatus.ERROR -> {
                     button {
