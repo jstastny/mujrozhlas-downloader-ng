@@ -45,7 +45,23 @@ Open http://localhost:8080. Features:
 
 Set `AUTH_USER` and `AUTH_PASS` environment variables to enable basic auth. Download links (`/dl/...`) remain publicly accessible via presigned URLs.
 
-### Docker
+### Docker Compose (recommended)
+
+The easiest way to run the web UI. Edit `docker-compose.yml` to set your port, username, and password, then:
+
+```bash
+docker compose up -d
+```
+
+The service restarts automatically on machine reboot. Data and downloads are stored in `./data` and `./downloads` next to the compose file.
+
+To update to a newer version:
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+### Docker (manual)
 
 ```bash
 docker build -t mujrozhlas-dl .
