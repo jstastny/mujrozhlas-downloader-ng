@@ -54,14 +54,33 @@ class DownloadQueue(
     }
 
     private fun recoverApproved() {
-        // Reset any episodes stuck in DOWNLOADING from a previous interrupted run
-        val stuckCount = transaction {
-            Episodes.update({ Episodes.status eq EpisodeStatus.DOWNLOADING }) {
-                it[status] = EpisodeStatus.APPROVED
-            }
+        // Reset stuck DOWNLOADING episodes: re-approve only if parent show is subscribed
+        val stuck = transaction {
+            Episodes.selectAll().where { Episodes.status eq EpisodeStatus.DOWNLOADING }
+                .map { it[Episodes.uuid] to it[Episodes.showUuid] }
         }
-        if (stuckCount > 0) {
-            log.info("Reset $stuckCount stuck DOWNLOADING episode(s) to APPROVED")
+
+        if (stuck.isNotEmpty()) {
+            val subscribedShows = transaction {
+                Shows.selectAll().where { Shows.subscribed eq true }
+                    .map { it[Shows.uuid] }.toSet()
+            }
+
+            var requeued = 0
+            var reverted = 0
+            transaction {
+                for ((uuid, showUuid) in stuck) {
+                    if (showUuid in subscribedShows) {
+                        Episodes.update({ Episodes.uuid eq uuid }) { it[status] = EpisodeStatus.APPROVED }
+                        requeued++
+                    } else {
+                        Episodes.update({ Episodes.uuid eq uuid }) { it[status] = EpisodeStatus.PENDING }
+                        reverted++
+                    }
+                }
+            }
+            if (requeued > 0) log.info("Reset $requeued stuck DOWNLOADING episode(s) to APPROVED (subscribed)")
+            if (reverted > 0) log.info("Reset $reverted stuck DOWNLOADING episode(s) to PENDING (not subscribed)")
         }
 
         val approved = transaction {

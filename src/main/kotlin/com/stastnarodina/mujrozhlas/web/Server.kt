@@ -409,11 +409,11 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                     Shows.update({ Shows.uuid eq uuid }) { it[subscribed] = false }
                 }
 
-                // Revert APPROVED episodes back to PENDING
+                // Revert APPROVED and DOWNLOADING episodes back to PENDING
                 val reverted = transaction {
                     Episodes.update({
                         (Episodes.showUuid eq uuid) and
-                                (Episodes.status eq EpisodeStatus.APPROVED)
+                                (Episodes.status inList listOf(EpisodeStatus.APPROVED, EpisodeStatus.DOWNLOADING))
                     }) { it[status] = EpisodeStatus.PENDING }
                 }
 
