@@ -87,12 +87,13 @@ class DownloadQueue(
             return
         }
 
-        val hlsUrl = episodeData[Episodes.hlsUrl]
-        if (hlsUrl == null) {
+        val audioUrl = episodeData[Episodes.hlsUrl]
+        val audioVariant = episodeData[Episodes.audioVariant]
+        if (audioUrl == null) {
             transaction {
                 Episodes.update({ Episodes.uuid eq episodeUuid }) {
                     it[status] = EpisodeStatus.ERROR
-                    it[errorMessage] = "No HLS URL available"
+                    it[errorMessage] = "No audio URL available"
                 }
             }
             currentDownload = null
@@ -122,7 +123,8 @@ class DownloadQueue(
 
         val padWidth = Downloader.digitCount(episodeNumber)
         val baseName = "%0${padWidth}d - %s".format(episodeNumber, Downloader.sanitizeFilename(containerTitle))
-        val m4aFile = File(containerDir, "$baseName.m4a")
+        val extension = if (audioVariant == "mp3") "mp3" else "m4a"
+        val outputFile = File(containerDir, "$baseName.$extension")
 
         transaction {
             Episodes.update({ Episodes.uuid eq episodeUuid }) {
@@ -132,14 +134,18 @@ class DownloadQueue(
 
         try {
             withContext(Dispatchers.IO) {
-                log.info("Downloading: ${episodeData[Episodes.title]} -> $baseName")
-                downloader.downloadHlsToM4a(hlsUrl, m4aFile)
+                log.info("Downloading ($audioVariant): ${episodeData[Episodes.title]} -> $baseName.$extension")
+                if (audioVariant == "mp3") {
+                    downloader.downloadFile(audioUrl, outputFile)
+                } else {
+                    downloader.downloadHlsToM4a(audioUrl, outputFile)
+                }
             }
             transaction {
                 Episodes.update({ Episodes.uuid eq episodeUuid }) {
                     it[status] = EpisodeStatus.DOWNLOADED
                     it[downloadedAt] = Instant.now()
-                    it[filePath] = m4aFile.absolutePath
+                    it[filePath] = outputFile.absolutePath
                 }
             }
             log.info("Downloaded: ${episodeData[Episodes.title]}")
@@ -185,25 +191,22 @@ class DownloadQueue(
             Episodes.selectAll()
                 .where { (Episodes.serialUuid eq serialUuid) and (Episodes.status eq EpisodeStatus.DOWNLOADED) }
                 .orderBy(Episodes.part)
-                .map { row ->
-                    val num = row[Episodes.part] ?: row[Episodes.seriesEpisodeNumber] ?: 0
-                    val padWidth = Downloader.digitCount(num)
+                .mapNotNull { row ->
+                    val path = row[Episodes.filePath] ?: return@mapNotNull null
                     DownloadedEpisode(
                         title = row[Episodes.title],
-                        number = num,
+                        number = row[Episodes.part] ?: row[Episodes.seriesEpisodeNumber] ?: 0,
                         duration = row[Episodes.duration],
-                        m4aFile = File(serialDir, "%0${padWidth}d - %s.m4a".format(
-                            num, Downloader.sanitizeFilename(serialTitle)
-                        )),
+                        audioFile = File(path),
                     )
                 }
         }
 
         if (episodes.isEmpty()) return
 
-        val missing = episodes.filter { !it.m4aFile.exists() }
+        val missing = episodes.filter { !it.audioFile.exists() }
         if (missing.isNotEmpty()) {
-            log.warn("Skipping M4B creation for '$serialTitle': missing ${missing.size} m4a files")
+            log.warn("Skipping M4B creation for '$serialTitle': missing ${missing.size} audio files")
             return
         }
 

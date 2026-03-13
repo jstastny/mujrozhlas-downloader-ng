@@ -78,3 +78,7 @@ data class AudioLink(
     val bitrate: Int,
     val playableTill: String? = null,
 )
+
+/** Pick the best audio link: prefer HLS (streaming), fall back to MP3 (direct download). */
+fun List<AudioLink>.bestAudioLink(): AudioLink? =
+    firstOrNull { it.variant == "hls" } ?: firstOrNull { it.variant == "mp3" }

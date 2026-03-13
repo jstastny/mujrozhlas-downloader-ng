@@ -43,6 +43,7 @@ object Episodes : Table("episodes") {
     val seriesEpisodeNumber = integer("series_episode_number").nullable()
     val status = enumerationByName<EpisodeStatus>("status", 20).default(EpisodeStatus.PENDING)
     val hlsUrl = varchar("hls_url", 2048).nullable()
+    val audioVariant = varchar("audio_variant", 16).default("hls")
     val duration = integer("duration").default(0)
     val playableTill = varchar("playable_till", 64).nullable()
     val discoveredAt = timestamp("discovered_at")
@@ -60,6 +61,6 @@ fun initDatabase(dbPath: String) {
     Database.connect("jdbc:sqlite:$dbPath", driver = "org.sqlite.JDBC")
 
     transaction {
-        SchemaUtils.create(Shows, Serials, Episodes)
+        SchemaUtils.createMissingTablesAndColumns(Shows, Serials, Episodes)
     }
 }

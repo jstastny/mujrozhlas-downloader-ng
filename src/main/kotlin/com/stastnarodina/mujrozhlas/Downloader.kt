@@ -69,7 +69,7 @@ class Downloader {
                     title = episode.title,
                     number = num,
                     duration = hlsLink.duration,
-                    m4aFile = m4aFile,
+                    audioFile = m4aFile,
                 ))
                 downloaded++
             } catch (e: Exception) {
@@ -209,7 +209,7 @@ class Downloader {
 
         val concatFile = File(parentDir, ".concat.txt")
         concatFile.writeText(sorted.joinToString("\n") { ep ->
-            "file '${ep.m4aFile.absolutePath.replace("'", "'\\''")}'"
+            "file '${ep.audioFile.absolutePath.replace("'", "'\\''")}'"
         })
 
         val metadataFile = File(parentDir, ".metadata.txt")
@@ -236,15 +236,18 @@ class Downloader {
                 "-f", "ffmetadata", "-i", metadataFile.absolutePath,
             )
 
+            // If any source file is not AAC (e.g. MP3), we need to transcode
+            val needsTranscode = sorted.any { !it.audioFile.name.endsWith(".m4a") }
+            val audioCodec = if (needsTranscode) listOf("-c:a", "aac", "-b:a", "128k") else listOf("-c:a", "copy")
+
             if (coverFile != null && coverFile.exists()) {
                 args.addAll(listOf("-i", coverFile.absolutePath))
-                args.addAll(listOf(
-                    "-map", "0:a", "-map", "2:v",
-                    "-c:a", "copy", "-c:v", "mjpeg",
-                    "-disposition:v:0", "attached_pic",
-                ))
+                args.addAll(listOf("-map", "0:a", "-map", "2:v"))
+                args.addAll(audioCodec)
+                args.addAll(listOf("-c:v", "mjpeg", "-disposition:v:0", "attached_pic"))
             } else {
-                args.addAll(listOf("-map", "0:a", "-c:a", "copy"))
+                args.addAll(listOf("-map", "0:a"))
+                args.addAll(audioCodec)
             }
 
             args.addAll(listOf("-map_metadata", "1", outputFile.absolutePath))
@@ -314,5 +317,5 @@ data class DownloadedEpisode(
     val title: String,
     val number: Int,
     val duration: Int,
-    val m4aFile: File,
+    val audioFile: File,
 )

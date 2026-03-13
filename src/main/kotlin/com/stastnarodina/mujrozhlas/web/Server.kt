@@ -508,17 +508,13 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                     Episodes.selectAll()
                         .where { (Episodes.serialUuid eq uuid) and (Episodes.status eq EpisodeStatus.DOWNLOADED) }
                         .orderBy(Episodes.part)
-                        .map { row ->
-                            val num = row[Episodes.part] ?: row[Episodes.seriesEpisodeNumber] ?: 0
-                            val padWidth = Downloader.digitCount(num)
+                        .mapNotNull { row ->
+                            val path = row[Episodes.filePath] ?: return@mapNotNull null
                             DownloadedEpisode(
                                 title = row[Episodes.title],
-                                number = num,
+                                number = row[Episodes.part] ?: row[Episodes.seriesEpisodeNumber] ?: 0,
                                 duration = row[Episodes.duration],
-                                m4aFile = File(
-                                    File(outputDir, Downloader.sanitizeFilename(serialTitle)),
-                                    "%0${padWidth}d - %s.m4a".format(num, Downloader.sanitizeFilename(serialTitle))
-                                ),
+                                audioFile = File(path),
                             )
                         }
                 }
@@ -528,10 +524,10 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                     return@post
                 }
 
-                val missing = episodes.filter { !it.m4aFile.exists() }
+                val missing = episodes.filter { !it.audioFile.exists() }
                 if (missing.isNotEmpty()) {
-                    val names = missing.joinToString(", ") { it.m4aFile.name }
-                    call.respondText("Missing m4a files: $names", contentType = ContentType.Text.Html)
+                    val names = missing.joinToString(", ") { it.audioFile.name }
+                    call.respondText("Missing audio files: $names", contentType = ContentType.Text.Html)
                     return@post
                 }
 
@@ -906,7 +902,7 @@ private fun insertEpisode(ep: Episode, showUuid: String, serialUuid: String?) {
     val exists = Episodes.selectAll().where { Episodes.uuid eq ep.uuid }.count() > 0
     if (exists) return
 
-    val hlsLink = ep.audioLinks.firstOrNull { it.variant == "hls" }
+    val bestLink = ep.audioLinks.bestAudioLink()
     Episodes.insert {
         it[uuid] = ep.uuid
         it[Episodes.showUuid] = showUuid
@@ -915,9 +911,10 @@ private fun insertEpisode(ep: Episode, showUuid: String, serialUuid: String?) {
         it[part] = ep.part
         it[seriesEpisodeNumber] = ep.seriesEpisodeNumber
         it[status] = EpisodeStatus.PENDING
-        it[hlsUrl] = hlsLink?.url
-        it[duration] = hlsLink?.duration ?: 0
-        it[playableTill] = hlsLink?.playableTill
+        it[hlsUrl] = bestLink?.url
+        it[audioVariant] = bestLink?.variant ?: "hls"
+        it[duration] = bestLink?.duration ?: 0
+        it[playableTill] = bestLink?.playableTill
         it[discoveredAt] = Instant.now()
     }
 }

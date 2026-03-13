@@ -2,6 +2,7 @@ package com.stastnarodina.mujrozhlas.web
 
 import com.stastnarodina.mujrozhlas.Api
 import com.stastnarodina.mujrozhlas.Episode
+import com.stastnarodina.mujrozhlas.bestAudioLink
 import kotlinx.coroutines.*
 import org.jetbrains.exposed.v1.core.*
 import org.jetbrains.exposed.v1.jdbc.*
@@ -206,8 +207,8 @@ class Discoverer(
 
         transaction {
             for (ep in newEpisodes) {
-                val hlsLink = ep.audioLinks.firstOrNull { it.variant == "hls" }
-                val duration = hlsLink?.duration ?: 0
+                val bestLink = ep.audioLinks.bestAudioLink()
+                val duration = bestLink?.duration ?: 0
                 val initialStatus = if (isSubscribed && duration > 0) {
                     EpisodeStatus.APPROVED
                 } else {
@@ -222,9 +223,10 @@ class Discoverer(
                     it[part] = ep.part
                     it[seriesEpisodeNumber] = ep.seriesEpisodeNumber
                     it[status] = initialStatus
-                    it[Episodes.hlsUrl] = hlsLink?.url
+                    it[Episodes.hlsUrl] = bestLink?.url
+                    it[Episodes.audioVariant] = bestLink?.variant ?: "hls"
                     it[Episodes.duration] = duration
-                    it[playableTill] = hlsLink?.playableTill
+                    it[playableTill] = bestLink?.playableTill
                     it[discoveredAt] = Instant.now()
                 }
 
@@ -334,8 +336,8 @@ class Discoverer(
 
         val nowAvailable = pendingNoAudio.filter { epUuid ->
             val apiEp = apiByUuid[epUuid] ?: return@filter false
-            val hlsLink = apiEp.audioLinks.firstOrNull { it.variant == "hls" }
-            hlsLink != null && hlsLink.duration > 0
+            val bestLink = apiEp.audioLinks.bestAudioLink()
+            bestLink != null && bestLink.duration > 0
         }
 
         if (nowAvailable.isNotEmpty()) {
@@ -343,11 +345,12 @@ class Discoverer(
             transaction {
                 for (epUuid in nowAvailable) {
                     val apiEp = apiByUuid[epUuid]!!
-                    val hlsLink = apiEp.audioLinks.first { it.variant == "hls" }
+                    val bestLink = apiEp.audioLinks.bestAudioLink()!!
                     Episodes.update({ Episodes.uuid eq epUuid }) {
-                        it[Episodes.hlsUrl] = hlsLink.url
-                        it[Episodes.duration] = hlsLink.duration
-                        it[Episodes.playableTill] = hlsLink.playableTill
+                        it[Episodes.hlsUrl] = bestLink.url
+                        it[Episodes.audioVariant] = bestLink.variant
+                        it[Episodes.duration] = bestLink.duration
+                        it[Episodes.playableTill] = bestLink.playableTill
                         it[Episodes.status] = EpisodeStatus.APPROVED
                     }
                 }
