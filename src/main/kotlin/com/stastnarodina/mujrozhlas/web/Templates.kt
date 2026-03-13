@@ -322,7 +322,7 @@ fun MAIN.serialDetail(serial: SerialRow, episodes: List<EpisodeRow>) {
         h1 { +serial.title }
         div {
             val downloadedCount = episodes.count { it.status == EpisodeStatus.DOWNLOADED }
-            if (downloadedCount > 0) {
+            if (downloadedCount > 0 && serial.totalParts <= MAX_M4B_EPISODES) {
                 span {
                     id = "m4b-status"
                     button {

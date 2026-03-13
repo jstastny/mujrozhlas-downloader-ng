@@ -441,6 +441,15 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                     Serials.selectAll().where { Serials.uuid eq uuid }.firstOrNull()
                 } ?: return@post call.respond(HttpStatusCode.NotFound, "Serial not found")
 
+                val totalParts = serialData[Serials.totalParts]
+                if (totalParts > MAX_M4B_EPISODES) {
+                    call.respondText(
+                        "Too many episodes ($totalParts) for M4B creation (max $MAX_M4B_EPISODES)",
+                        contentType = ContentType.Text.Html,
+                    )
+                    return@post
+                }
+
                 val serialTitle = serialData[Serials.title]
                 val imageUrl = serialData[Serials.imageUrl]
 
@@ -504,7 +513,10 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
             post("/episodes/{uuid}/approve") {
                 val uuid = call.parameters["uuid"] ?: return@post call.respond(HttpStatusCode.BadRequest)
                 transaction {
-                    Episodes.update({ Episodes.uuid eq uuid }) { it[status] = EpisodeStatus.APPROVED }
+                    Episodes.update({ Episodes.uuid eq uuid }) {
+                        it[status] = EpisodeStatus.APPROVED
+                        it[errorMessage] = null
+                    }
                 }
                 downloadQueue.enqueue(uuid)
                 respondEpisodeRow(call, uuid, urlSigner)

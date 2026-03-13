@@ -11,6 +11,9 @@ import org.slf4j.LoggerFactory
 import java.io.File
 import java.time.Instant
 
+/** Maximum number of episodes for automatic M4B audiobook creation. */
+const val MAX_M4B_EPISODES = 100
+
 class DownloadQueue(
     private val downloader: Downloader,
     private val outputDir: File,
@@ -148,6 +151,9 @@ class DownloadQueue(
                 .firstOrNull()?.get(Shows.subscribed) ?: false
         }
         if (!isSubscribed) return
+
+        val totalParts = serialData[Serials.totalParts]
+        if (totalParts > MAX_M4B_EPISODES) return
 
         val serialTitle = serialData[Serials.title]
         val imageUrl = serialData[Serials.imageUrl]
