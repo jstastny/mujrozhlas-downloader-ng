@@ -48,7 +48,7 @@ data class SerialRow(
 data class EpisodeRow(
     val uuid: String,
     val title: String,
-    val number: Int,
+    val number: Int?,
     val status: EpisodeStatus,
     val duration: Int,
     val playableTill: String?,
@@ -427,7 +427,7 @@ fun FlowContent.episodeTable(episodes: List<EpisodeRow>) {
 fun TBODY.episodeRow(episode: EpisodeRow) {
     tr {
         id = "episode-${episode.uuid}"
-        td { +"${episode.number}" }
+        td { +(episode.number?.toString() ?: "") }
         td {
             +episode.title
             episode.errorMessage?.let {

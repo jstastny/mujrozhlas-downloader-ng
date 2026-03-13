@@ -410,14 +410,16 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                         .where {
                             (Episodes.showUuid eq uuid) and
                                     Episodes.serialUuid.isNull() and
-                                    (Episodes.status eq EpisodeStatus.PENDING)
+                                    (Episodes.status eq EpisodeStatus.PENDING) and
+                                    (Episodes.duration greater 0)
                         }
                         .map { it[Episodes.uuid] }
 
                     Episodes.update({
                         (Episodes.showUuid eq uuid) and
                                 Episodes.serialUuid.isNull() and
-                                (Episodes.status eq EpisodeStatus.PENDING)
+                                (Episodes.status eq EpisodeStatus.PENDING) and
+                                (Episodes.duration greater 0)
                     }) { it[status] = EpisodeStatus.APPROVED }
 
                     uuids
@@ -449,11 +451,17 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
 
                 val episodeUuids = transaction {
                     val uuids = Episodes.selectAll()
-                        .where { (Episodes.serialUuid eq uuid) and (Episodes.status eq EpisodeStatus.PENDING) }
+                        .where {
+                            (Episodes.serialUuid eq uuid) and
+                                    (Episodes.status eq EpisodeStatus.PENDING) and
+                                    (Episodes.duration greater 0)
+                        }
                         .map { it[Episodes.uuid] }
 
                     Episodes.update({
-                        (Episodes.serialUuid eq uuid) and (Episodes.status eq EpisodeStatus.PENDING)
+                        (Episodes.serialUuid eq uuid) and
+                                (Episodes.status eq EpisodeStatus.PENDING) and
+                                (Episodes.duration greater 0)
                     }) { it[status] = EpisodeStatus.APPROVED }
 
                     uuids
@@ -924,7 +932,7 @@ private suspend fun respondEpisodeRow(call: ApplicationCall, uuid: String, urlSi
     }
     val html = createHTML().tr {
         id = "episode-${episode.uuid}"
-        td { +"${episode.number}" }
+        td { +(episode.number?.toString() ?: "") }
         td {
             +episode.title
             episode.errorMessage?.let {
@@ -1013,7 +1021,7 @@ private fun ResultRow.toEpisodeRow(urlSigner: UrlSigner? = null): EpisodeRow {
     return EpisodeRow(
         uuid = this[Episodes.uuid],
         title = this[Episodes.title],
-        number = this[Episodes.part] ?: this[Episodes.seriesEpisodeNumber] ?: 0,
+        number = this[Episodes.part] ?: this[Episodes.seriesEpisodeNumber],
         status = this[Episodes.status],
         duration = this[Episodes.duration],
         playableTill = this[Episodes.playableTill],
