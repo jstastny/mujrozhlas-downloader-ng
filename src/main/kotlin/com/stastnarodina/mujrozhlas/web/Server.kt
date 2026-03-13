@@ -246,8 +246,13 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                 }
 
                 try {
-                    val resolver = Resolver(api)
-                    val result = resolver.resolve(url)
+                    val input = url.trim()
+                    val uuidRegex = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+                    val result = if (uuidRegex.matches(input)) {
+                        resolveByUuid(api, input)
+                    } else {
+                        Resolver(api).resolve(input)
+                    }
 
                     val show = when (result) {
                         is ResolvedResult.ShowResult -> result.show
@@ -580,6 +585,40 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
 }
 
 // --- Helpers ---
+
+/**
+ * Try to resolve a UUID by probing the API as episode, serial, and show.
+ * Tries all three (cheapest first) and returns the first match.
+ */
+private fun resolveByUuid(api: Api, uuid: String): ResolvedResult {
+    // Try as episode (single fetch, cheapest)
+    try {
+        val episode = api.getEpisode(uuid)
+        return ResolvedResult.EpisodeResult(episode)
+    } catch (_: Exception) {}
+
+    // Try as serial
+    try {
+        val serial = api.getSerial(uuid)
+        val episodes = api.getSerialEpisodes(uuid)
+        return ResolvedResult.SerialResult(serial.copy(episodes = episodes))
+    } catch (_: Exception) {}
+
+    // Try as show (most expensive — fetches serials + episodes)
+    try {
+        val show = api.getShow(uuid)
+        val serials = api.getShowSerials(uuid).map { serial ->
+            serial.copy(episodes = api.getSerialEpisodes(serial.uuid))
+        }
+        val allEpisodes = api.getShowEpisodes(uuid)
+        val serialEpUuids = serials.flatMap { s -> s.episodes.map { it.uuid } }.toSet()
+        return ResolvedResult.ShowResult(
+            show.copy(serials = serials, episodes = allEpisodes.filter { it.uuid !in serialEpUuids })
+        )
+    } catch (_: Exception) {}
+
+    throw RuntimeException("UUID $uuid not found as episode, serial, or show")
+}
 
 /** Insert a fully-populated Show (with serials and episodes) into the database. */
 private fun insertShow(show: Show) {

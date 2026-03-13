@@ -141,9 +141,9 @@ fun MAIN.dashboard(shows: List<ShowRow>, isDiscovering: Boolean) {
         attributes["hx-swap"] = "afterbegin"
         role = "group"
         input {
-            type = InputType.url
+            type = InputType.text
             name = "url"
-            placeholder = "Paste mujrozhlas.cz URL to add a show..."
+            placeholder = "Paste mujrozhlas.cz URL or UUID..."
         }
         button { type = ButtonType.submit; +"Add" }
     }
