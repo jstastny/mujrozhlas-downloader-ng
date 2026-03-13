@@ -12,6 +12,7 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.runBlocking
 import kotlinx.html.*
 import kotlinx.html.stream.createHTML
 import org.jetbrains.exposed.v1.core.*
@@ -40,7 +41,7 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
     downloadQueue.start()
     discoverer.start()
 
-    embeddedServer(Netty, port = port) {
+    val server = embeddedServer(Netty, port = port) {
         install(StatusPages) {
             exception<Throwable> { call, cause ->
                 serverLog.error("Unhandled error", cause)
@@ -767,7 +768,19 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                 }
             }
         }
-    }.start(wait = true)
+    }
+
+    Runtime.getRuntime().addShutdownHook(Thread {
+        serverLog.info("Shutdown signal received, waiting for current work to finish...")
+        runBlocking {
+            discoverer.shutdown()
+            downloadQueue.shutdown()
+        }
+        server.stop(1000, 5000)
+        serverLog.info("Shutdown complete")
+    })
+
+    server.start(wait = true)
 }
 
 // --- Helpers ---

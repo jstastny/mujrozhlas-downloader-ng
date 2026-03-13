@@ -16,12 +16,14 @@ class Discoverer(
 ) {
     private val log = LoggerFactory.getLogger(Discoverer::class.java)
 
+    private var periodicJob: Job? = null
+
     @Volatile
     var isDiscovering = false
         private set
 
     fun start(intervalHours: Long = 6) {
-        scope.launch {
+        periodicJob = scope.launch {
             while (isActive) {
                 runDiscovery()
                 delay(intervalHours * 3600 * 1000)
@@ -32,6 +34,13 @@ class Discoverer(
     fun discoverNow() {
         if (isDiscovering) return
         scope.launch { runDiscovery() }
+    }
+
+    /** Cancel periodic discovery and wait for any in-progress run to finish. */
+    suspend fun shutdown() {
+        log.info("Shutting down discoverer...")
+        periodicJob?.cancelAndJoin()
+        log.info("Discoverer stopped")
     }
 
     suspend fun runDiscovery() {

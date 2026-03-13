@@ -3,6 +3,7 @@ services:
     image: jstastny/mujrozhlas-downloader-ng:latest
     pull_policy: always
     restart: unless-stopped
+    stop_grace_period: 5m
     ports:
       - "8080:8080"  # change left side to your preferred port
     environment:

@@ -21,6 +21,7 @@ class DownloadQueue(
 ) {
     private val log = LoggerFactory.getLogger(DownloadQueue::class.java)
     private val channel = Channel<String>(Channel.UNLIMITED)
+    private var processingJob: Job? = null
 
     @Volatile
     var currentDownload: String? = null
@@ -30,7 +31,7 @@ class DownloadQueue(
         outputDir.mkdirs()
         recoverApproved()
 
-        scope.launch {
+        processingJob = scope.launch {
             for (episodeUuid in channel) {
                 processDownload(episodeUuid)
             }
@@ -39,6 +40,17 @@ class DownloadQueue(
 
     fun enqueue(episodeUuid: String) {
         channel.trySend(episodeUuid)
+    }
+
+    /**
+     * Graceful shutdown: stop accepting new work and wait for the
+     * current download to finish.
+     */
+    suspend fun shutdown() {
+        log.info("Shutting down download queue...")
+        channel.close()
+        processingJob?.join()
+        log.info("Download queue stopped")
     }
 
     private fun recoverApproved() {
