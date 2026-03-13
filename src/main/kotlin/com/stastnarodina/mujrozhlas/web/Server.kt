@@ -107,6 +107,11 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                         .groupBy(Serials.showUuid)
                         .associate { it[Serials.showUuid] to it[Serials.uuid.count()] }
 
+                    val serialTitlesByShow = Serials
+                        .select(Serials.showUuid, Serials.title)
+                        .map { it[Serials.showUuid] to it[Serials.title] }
+                        .groupBy({ it.first }, { it.second })
+
                     val episodeCounts = Episodes
                         .select(Episodes.showUuid, Episodes.uuid.count())
                         .groupBy(Episodes.showUuid)
@@ -126,9 +131,10 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                                 downloadedCount = downloadedCounts[uuid]?.toInt() ?: 0,
                                 subscribed = row[Shows.subscribed],
                                 imageUrl = row[Shows.imageUrl],
+                                serialTitles = serialTitlesByShow[uuid] ?: emptyList(),
                             )
                         }
-                        .filter { it.pendingCount > 0 || it.downloadedCount > 0 || it.subscribed }
+
                 }
 
                 call.respondHtml {
@@ -614,11 +620,18 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                 try {
                     val serials = api.searchSerials(query)
                     for (serial in serials) {
+                        val parentShowTitle = serial.showUuid?.let { showUuid ->
+                            try { api.getShow(showUuid).title } catch (_: Exception) { null }
+                        }
+                        val detail = listOfNotNull(
+                            "${serial.totalParts} parts",
+                            parentShowTitle?.let { "in $it" },
+                        ).joinToString(" | ")
                         results.add(SearchResult(
                             uuid = serial.uuid,
                             title = serial.title,
                             type = "serial",
-                            detail = "${serial.totalParts} parts",
+                            detail = detail,
                             imageUrl = serial.imageUrl,
                             alreadyAdded = serial.uuid in knownSerialUuids,
                         ))
@@ -627,8 +640,9 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                     serverLog.warn("Serial search failed for '$query': ${e.message}")
                 }
 
+                val deduplicated = results.distinctBy { it.uuid }
                 val html = createHTML().div {
-                    searchResults(results)
+                    searchResults(deduplicated)
                 }
                 call.respondText(html, contentType = ContentType.Text.Html)
             }

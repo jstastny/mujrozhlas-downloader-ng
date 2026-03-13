@@ -16,6 +16,7 @@ data class ShowRow(
     val downloadedCount: Int,
     val subscribed: Boolean = false,
     val imageUrl: String? = null,
+    val serialTitles: List<String> = emptyList(),
 )
 
 data class SerialRow(
@@ -178,7 +179,8 @@ fun MAIN.dashboard(shows: List<ShowRow>, isDiscovering: Boolean) {
                 var q = normalize(query);
                 document.querySelectorAll('#show-list .show-card').forEach(function(card) {
                     var title = normalize(card.textContent);
-                    card.style.display = title.includes(q) ? '' : 'none';
+                    var serials = normalize(card.getAttribute('data-serials') || '');
+                    card.style.display = (title.includes(q) || serials.includes(q)) ? '' : 'none';
                 });
             }
             """.trimIndent()
@@ -190,6 +192,7 @@ fun FlowContent.showCard(show: ShowRow) {
     article {
         id = "show-${show.uuid}"
         attributes["class"] = "show-card"
+        attributes["data-serials"] = show.serialTitles.joinToString(" | ")
         header {
             div {
                 style = "display: flex; justify-content: space-between; align-items: center;"
