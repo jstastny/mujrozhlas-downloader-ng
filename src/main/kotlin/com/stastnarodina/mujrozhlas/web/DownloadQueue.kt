@@ -54,6 +54,16 @@ class DownloadQueue(
     }
 
     private fun recoverApproved() {
+        // Reset any episodes stuck in DOWNLOADING from a previous interrupted run
+        val stuckCount = transaction {
+            Episodes.update({ Episodes.status eq EpisodeStatus.DOWNLOADING }) {
+                it[status] = EpisodeStatus.APPROVED
+            }
+        }
+        if (stuckCount > 0) {
+            log.info("Reset $stuckCount stuck DOWNLOADING episode(s) to APPROVED")
+        }
+
         val approved = transaction {
             Episodes.selectAll().where { Episodes.status eq EpisodeStatus.APPROVED }
                 .map { it[Episodes.uuid] }
