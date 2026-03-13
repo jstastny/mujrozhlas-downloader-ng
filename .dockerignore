@@ -1,0 +1,13 @@
+.gradle/
+build/
+.idea/
+.kotlin/
+*.iml
+data/
+downloads/
+.git/
+.gitignore
+.dockerignore
+docker-compose.yml
+README.md
+LICENSE
