@@ -54,6 +54,11 @@ class DownloadQueue(
     }
 
     private fun recoverApproved() {
+        val subscribedShows = transaction {
+            Shows.selectAll().where { Shows.subscribed eq true }
+                .map { it[Shows.uuid] }.toSet()
+        }
+
         // Reset stuck DOWNLOADING episodes: re-approve only if parent show is subscribed
         val stuck = transaction {
             Episodes.selectAll().where { Episodes.status eq EpisodeStatus.DOWNLOADING }
@@ -61,11 +66,6 @@ class DownloadQueue(
         }
 
         if (stuck.isNotEmpty()) {
-            val subscribedShows = transaction {
-                Shows.selectAll().where { Shows.subscribed eq true }
-                    .map { it[Shows.uuid] }.toSet()
-            }
-
             var requeued = 0
             var reverted = 0
             transaction {
@@ -83,14 +83,27 @@ class DownloadQueue(
             if (reverted > 0) log.info("Reset $reverted stuck DOWNLOADING episode(s) to PENDING (not subscribed)")
         }
 
+        // Re-enqueue APPROVED episodes only if parent show is still subscribed
         val approved = transaction {
             Episodes.selectAll().where { Episodes.status eq EpisodeStatus.APPROVED }
-                .map { it[Episodes.uuid] }
+                .map { it[Episodes.uuid] to it[Episodes.showUuid] }
         }
-        for (uuid in approved) {
-            log.info("Re-enqueuing approved episode: $uuid")
-            channel.trySend(uuid)
+
+        var enqueued = 0
+        var stale = 0
+        for ((uuid, showUuid) in approved) {
+            if (showUuid in subscribedShows) {
+                channel.trySend(uuid)
+                enqueued++
+            } else {
+                transaction {
+                    Episodes.update({ Episodes.uuid eq uuid }) { it[status] = EpisodeStatus.PENDING }
+                }
+                stale++
+            }
         }
+        if (enqueued > 0) log.info("Re-enqueued $enqueued approved episode(s)")
+        if (stale > 0) log.info("Reverted $stale stale APPROVED episode(s) to PENDING (show unsubscribed)")
     }
 
     private suspend fun processDownload(episodeUuid: String) {
