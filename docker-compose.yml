@@ -1,6 +1,7 @@
 services:
   mujrozhlas-dl:
-    image: jstastny/mujrozhlas-downloader-ng:v1
+    image: jstastny/mujrozhlas-downloader-ng:latest
+    pull_policy: always
     restart: unless-stopped
     ports:
       - "8080:8080"  # change left side to your preferred port
