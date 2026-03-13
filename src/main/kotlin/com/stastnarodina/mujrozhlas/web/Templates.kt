@@ -7,6 +7,22 @@ import java.time.format.DateTimeFormatter
 
 // --- View data classes ---
 
+enum class ContentUnitType { SHOW, SERIAL }
+
+data class ContentUnit(
+    val uuid: String,
+    val title: String,
+    val type: ContentUnitType,
+    val episodeCount: Int,
+    val pendingCount: Int,
+    val downloadedCount: Int,
+    val subscribed: Boolean,
+    val imageUrl: String? = null,
+    val parentShowTitle: String? = null,
+    val parentShowUuid: String? = null,
+    val detailUrl: String,
+)
+
 data class ShowRow(
     val uuid: String,
     val title: String,
@@ -16,7 +32,6 @@ data class ShowRow(
     val downloadedCount: Int,
     val subscribed: Boolean = false,
     val imageUrl: String? = null,
-    val serialTitles: List<String> = emptyList(),
 )
 
 data class SerialRow(
@@ -110,7 +125,7 @@ fun HTML.layout(pageTitle: String, content: MAIN.() -> Unit) {
 
 // --- Dashboard ---
 
-fun MAIN.dashboard(shows: List<ShowRow>, isDiscovering: Boolean) {
+fun MAIN.dashboard(units: List<ContentUnit>, isDiscovering: Boolean) {
     div {
         style = "display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;"
         h1 { +"Dashboard" }
@@ -139,7 +154,7 @@ fun MAIN.dashboard(shows: List<ShowRow>, isDiscovering: Boolean) {
     // URL input
     form {
         attributes["hx-post"] = "/shows/add"
-        attributes["hx-target"] = "#show-list"
+        attributes["hx-target"] = "#content-list"
         attributes["hx-swap"] = "afterbegin"
         role = "group"
         input {
@@ -152,19 +167,19 @@ fun MAIN.dashboard(shows: List<ShowRow>, isDiscovering: Boolean) {
 
     input {
         type = InputType.search
-        id = "show-search"
-        placeholder = "Filter shows..."
-        attributes["oninput"] = "filterShows(this.value)"
+        id = "content-search"
+        placeholder = "Filter..."
+        attributes["oninput"] = "filterContent(this.value)"
         style = "margin-bottom: 1rem;"
     }
 
     div {
-        id = "show-list"
-        if (shows.isEmpty()) {
-            p { +"No shows tracked yet. Add a show URL above or click 'Discover Now'." }
+        id = "content-list"
+        if (units.isEmpty()) {
+            p { +"No content tracked yet. Add a URL above or click 'Discover Now'." }
         } else {
-            for (show in shows) {
-                showCard(show)
+            for (unit in units) {
+                contentUnitCard(unit)
             }
         }
     }
@@ -175,12 +190,11 @@ fun MAIN.dashboard(shows: List<ShowRow>, isDiscovering: Boolean) {
             function normalize(s) {
                 return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
             }
-            function filterShows(query) {
+            function filterContent(query) {
                 var q = normalize(query);
-                document.querySelectorAll('#show-list .show-card').forEach(function(card) {
-                    var title = normalize(card.textContent);
-                    var serials = normalize(card.getAttribute('data-serials') || '');
-                    card.style.display = (title.includes(q) || serials.includes(q)) ? '' : 'none';
+                document.querySelectorAll('#content-list .content-card').forEach(function(card) {
+                    var text = normalize(card.textContent);
+                    card.style.display = text.includes(q) ? '' : 'none';
                 });
             }
             """.trimIndent()
@@ -188,44 +202,51 @@ fun MAIN.dashboard(shows: List<ShowRow>, isDiscovering: Boolean) {
     }
 }
 
-fun FlowContent.showCard(show: ShowRow) {
+fun FlowContent.contentUnitCard(unit: ContentUnit) {
+    val cardId = "${unit.type.name.lowercase()}-${unit.uuid}"
+    val showUuid = if (unit.type == ContentUnitType.SHOW) unit.uuid else unit.parentShowUuid!!
     article {
-        id = "show-${show.uuid}"
-        attributes["class"] = "show-card"
-        attributes["data-serials"] = show.serialTitles.joinToString(" | ")
+        id = cardId
+        attributes["class"] = "content-card"
         header {
             div {
                 style = "display: flex; justify-content: space-between; align-items: center;"
-                a(href = "/shows/${show.uuid}") {
-                    strong { +show.title }
+                div {
+                    a(href = unit.detailUrl) {
+                        strong { +unit.title }
+                    }
+                    unit.parentShowTitle?.let { parentTitle ->
+                        br
+                        small { +"in $parentTitle" }
+                    }
                 }
                 div {
-                    if (show.subscribed) {
+                    if (unit.subscribed) {
                         span("badge badge-subscribed") { +"subscribed" }
                         +" "
                     }
-                    if (show.pendingCount > 0) {
-                        span("badge badge-pending") { +"${show.pendingCount} pending" }
+                    if (unit.pendingCount > 0) {
+                        span("badge badge-pending") { +"${unit.pendingCount} pending" }
                         +" "
                     }
-                    if (show.downloadedCount > 0) {
-                        span("badge badge-downloaded") { +"${show.downloadedCount} downloaded" }
+                    if (unit.downloadedCount > 0) {
+                        span("badge badge-downloaded") { +"${unit.downloadedCount} downloaded" }
                         +" "
                     }
-                    if (!show.subscribed) {
+                    if (!unit.subscribed) {
                         button {
                             attributes["class"] = "outline"
-                            attributes["hx-post"] = "/shows/${show.uuid}/subscribe"
+                            attributes["hx-post"] = "/shows/$showUuid/subscribe"
                             style = "margin-left: 0.5rem; padding: 4px 12px; font-size: 0.85em;"
                             +"Subscribe"
                         }
                     }
                     button {
                         attributes["class"] = "outline secondary"
-                        attributes["hx-post"] = "/shows/${show.uuid}/hide"
-                        attributes["hx-target"] = "#show-${show.uuid}"
+                        attributes["hx-post"] = "/shows/$showUuid/hide"
+                        attributes["hx-target"] = "#$cardId"
                         attributes["hx-swap"] = "outerHTML"
-                        attributes["hx-confirm"] = "Hide '${show.title}' from dashboard?"
+                        attributes["hx-confirm"] = "Hide '${unit.title}' from dashboard?"
                         style = "margin-left: 0.5rem; padding: 4px 12px; font-size: 0.85em;"
                         +"Hide"
                     }
@@ -234,8 +255,7 @@ fun FlowContent.showCard(show: ShowRow) {
         }
         footer {
             small {
-                if (show.serialCount > 0) +"${show.serialCount} serial(s) | "
-                +"${show.episodeCount} episode(s)"
+                +"${unit.episodeCount} episode(s)"
             }
         }
     }
@@ -272,7 +292,7 @@ fun MAIN.showDetail(
                 attributes["class"] = "serial-card"
                 div {
                     style = "display: flex; justify-content: space-between; align-items: center;"
-                    a(href = "/shows/${show.uuid}/serials/${serial.uuid}") {
+                    a(href = "/serials/${serial.uuid}") {
                         strong { +serial.title }
                     }
                     div {
@@ -320,11 +340,29 @@ fun MAIN.showDetail(
 
 // --- Serial detail ---
 
-fun MAIN.serialDetail(serial: SerialRow, episodes: List<EpisodeRow>) {
+fun MAIN.serialDetail(serial: SerialRow, episodes: List<EpisodeRow>, parentShowTitle: String?, parentShowSubscribed: Boolean) {
     div {
         style = "display: flex; justify-content: space-between; align-items: center;"
-        h1 { +serial.title }
         div {
+            h1 { +serial.title }
+            if (parentShowTitle != null) {
+                p {
+                    +"in "
+                    a(href = "/shows/${serial.showUuid}") { +parentShowTitle }
+                }
+            }
+        }
+        div {
+            if (parentShowSubscribed) {
+                span("badge badge-subscribed") { +"subscribed" }
+                +" "
+            } else {
+                button {
+                    attributes["hx-post"] = "/shows/${serial.showUuid}/subscribe"
+                    style = "margin-right: 0.5rem;"
+                    +"Subscribe"
+                }
+            }
             val downloadedCount = episodes.count { it.status == EpisodeStatus.DOWNLOADED }
             if (downloadedCount > 0 && serial.totalParts <= MAX_M4B_EPISODES) {
                 span {

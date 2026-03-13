@@ -89,57 +89,81 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
             // --- Dashboard ---
 
             get("/") {
-                val shows = transaction {
-                    val pendingCounts = Episodes
-                        .select(Episodes.showUuid, Episodes.uuid.count())
-                        .where { Episodes.status eq EpisodeStatus.PENDING }
-                        .groupBy(Episodes.showUuid)
-                        .associate { it[Episodes.showUuid] to it[Episodes.uuid.count()] }
+                val units = transaction {
+                    val results = mutableListOf<ContentUnit>()
 
-                    val downloadedCounts = Episodes
-                        .select(Episodes.showUuid, Episodes.uuid.count())
-                        .where { Episodes.status eq EpisodeStatus.DOWNLOADED }
-                        .groupBy(Episodes.showUuid)
-                        .associate { it[Episodes.showUuid] to it[Episodes.uuid.count()] }
+                    // Shows that have serials (container shows)
+                    val showsWithSerials = Serials
+                        .select(Serials.showUuid)
+                        .withDistinct()
+                        .map { it[Serials.showUuid] }
+                        .toSet()
 
-                    val serialCounts = Serials
-                        .select(Serials.showUuid, Serials.uuid.count())
-                        .groupBy(Serials.showUuid)
-                        .associate { it[Serials.showUuid] to it[Serials.uuid.count()] }
-
-                    val serialTitlesByShow = Serials
-                        .select(Serials.showUuid, Serials.title)
-                        .map { it[Serials.showUuid] to it[Serials.title] }
-                        .groupBy({ it.first }, { it.second })
-
-                    val episodeCounts = Episodes
-                        .select(Episodes.showUuid, Episodes.uuid.count())
-                        .groupBy(Episodes.showUuid)
-                        .associate { it[Episodes.showUuid] to it[Episodes.uuid.count()] }
-
+                    // 1) Shows WITHOUT serials → appear directly as content units
                     Shows.selectAll()
-                        .where { Shows.hidden eq false }
+                        .where { (Shows.hidden eq false) and (Shows.uuid notInList showsWithSerials) }
                         .orderBy(Shows.title)
-                        .map { row ->
+                        .forEach { row ->
                             val uuid = row[Shows.uuid]
-                            ShowRow(
+                            val epCount = Episodes.selectAll()
+                                .where { Episodes.showUuid eq uuid }
+                                .count().toInt()
+                            val pending = Episodes.selectAll()
+                                .where { (Episodes.showUuid eq uuid) and (Episodes.status eq EpisodeStatus.PENDING) }
+                                .count().toInt()
+                            val downloaded = Episodes.selectAll()
+                                .where { (Episodes.showUuid eq uuid) and (Episodes.status eq EpisodeStatus.DOWNLOADED) }
+                                .count().toInt()
+                            results.add(ContentUnit(
                                 uuid = uuid,
                                 title = row[Shows.title],
-                                serialCount = serialCounts[uuid]?.toInt() ?: 0,
-                                episodeCount = episodeCounts[uuid]?.toInt() ?: 0,
-                                pendingCount = pendingCounts[uuid]?.toInt() ?: 0,
-                                downloadedCount = downloadedCounts[uuid]?.toInt() ?: 0,
+                                type = ContentUnitType.SHOW,
+                                episodeCount = epCount,
+                                pendingCount = pending,
+                                downloadedCount = downloaded,
                                 subscribed = row[Shows.subscribed],
                                 imageUrl = row[Shows.imageUrl],
-                                serialTitles = serialTitlesByShow[uuid] ?: emptyList(),
-                            )
+                                detailUrl = "/shows/$uuid",
+                            ))
                         }
 
+                    // 2) Serials → each appears as its own content unit
+                    (Serials innerJoin Shows)
+                        .selectAll()
+                        .where { Shows.hidden eq false }
+                        .orderBy(Serials.title)
+                        .forEach { row ->
+                            val serialUuid = row[Serials.uuid]
+                            val epCount = Episodes.selectAll()
+                                .where { Episodes.serialUuid eq serialUuid }
+                                .count().toInt()
+                            val pending = Episodes.selectAll()
+                                .where { (Episodes.serialUuid eq serialUuid) and (Episodes.status eq EpisodeStatus.PENDING) }
+                                .count().toInt()
+                            val downloaded = Episodes.selectAll()
+                                .where { (Episodes.serialUuid eq serialUuid) and (Episodes.status eq EpisodeStatus.DOWNLOADED) }
+                                .count().toInt()
+                            results.add(ContentUnit(
+                                uuid = serialUuid,
+                                title = row[Serials.title],
+                                type = ContentUnitType.SERIAL,
+                                episodeCount = epCount,
+                                pendingCount = pending,
+                                downloadedCount = downloaded,
+                                subscribed = row[Shows.subscribed],
+                                imageUrl = row[Serials.imageUrl] ?: row[Shows.imageUrl],
+                                parentShowTitle = row[Shows.title],
+                                parentShowUuid = row[Shows.uuid],
+                                detailUrl = "/serials/$serialUuid",
+                            ))
+                        }
+
+                    results.sortedBy { it.title }
                 }
 
                 call.respondHtml {
                     layout("Dashboard - mujrozhlas-dl") {
-                        dashboard(shows, discoverer.isDiscovering)
+                        dashboard(units, discoverer.isDiscovering)
                     }
                 }
             }
@@ -209,36 +233,15 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
 
             // --- Serial detail ---
 
+            get("/serials/{serialUuid}") {
+                val serialUuid = call.parameters["serialUuid"] ?: return@get call.respond(HttpStatusCode.BadRequest)
+                respondSerialDetail(call, serialUuid, urlSigner)
+            }
+
+            // Keep old URL working for backward compat
             get("/shows/{showUuid}/serials/{serialUuid}") {
                 val serialUuid = call.parameters["serialUuid"] ?: return@get call.respond(HttpStatusCode.BadRequest)
-
-                val serialData = transaction {
-                    Serials.selectAll().where { Serials.uuid eq serialUuid }.firstOrNull()
-                } ?: return@get call.respond(HttpStatusCode.NotFound, "Serial not found")
-
-                val episodes = transaction {
-                    Episodes.selectAll().where { Episodes.serialUuid eq serialUuid }
-                        .orderBy(Episodes.part)
-                        .map { it.toEpisodeRow(urlSigner) }
-                }
-
-                val m4bPath = serialData[Serials.m4bPath]
-                val serialRow = SerialRow(
-                    uuid = serialData[Serials.uuid],
-                    showUuid = serialData[Serials.showUuid],
-                    title = serialData[Serials.title],
-                    totalParts = serialData[Serials.totalParts],
-                    pendingCount = episodes.count { it.status == EpisodeStatus.PENDING },
-                    downloadedCount = episodes.count { it.status == EpisodeStatus.DOWNLOADED },
-                    lastEpisodeSince = serialData[Serials.lastEpisodeSince],
-                    m4bDownloadUrl = if (m4bPath != null) urlSigner.sign(File(m4bPath)) else null,
-                )
-
-                call.respondHtml {
-                    layout("${serialRow.title} - mujrozhlas-dl") {
-                        serialDetail(serialRow, episodes)
-                    }
-                }
+                respondSerialDetail(call, serialUuid, urlSigner)
             }
 
             // --- Show actions ---
@@ -291,26 +294,59 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
 
                     insertShow(show)
 
-                    val episodeCount = show.serials.sumOf { it.episodes.size } + show.episodes.size
-                    val html = createHTML().article {
-                        id = "show-${show.uuid}"
-                        attributes["class"] = "show-card"
-                        header {
-                            div {
-                                style = "display: flex; justify-content: space-between; align-items: center;"
-                                a(href = "/shows/${show.uuid}") {
-                                    strong { +show.title }
-                                }
-                                div {
-                                    span("badge badge-pending") { +"$episodeCount pending" }
-                                }
+                    // Build content unit cards for each added item
+                    val html = buildString {
+                        if (show.serials.isNotEmpty()) {
+                            // Serials → each gets its own card
+                            for (serial in show.serials) {
+                                append(createHTML().div {
+                                    contentUnitCard(ContentUnit(
+                                        uuid = serial.uuid,
+                                        title = serial.title,
+                                        type = ContentUnitType.SERIAL,
+                                        episodeCount = serial.episodes.size,
+                                        pendingCount = serial.episodes.size,
+                                        downloadedCount = 0,
+                                        subscribed = false,
+                                        imageUrl = serial.imageUrl ?: show.imageUrl,
+                                        parentShowTitle = show.title,
+                                        parentShowUuid = show.uuid,
+                                        detailUrl = "/serials/${serial.uuid}",
+                                    ))
+                                })
                             }
                         }
-                        footer {
-                            small {
-                                if (show.serials.isNotEmpty()) +"${show.serials.size} serial(s) | "
-                                +"$episodeCount episode(s) | Added manually"
-                            }
+                        if (show.episodes.isNotEmpty()) {
+                            // Direct episodes → show card
+                            append(createHTML().div {
+                                contentUnitCard(ContentUnit(
+                                    uuid = show.uuid,
+                                    title = show.title,
+                                    type = ContentUnitType.SHOW,
+                                    episodeCount = show.episodes.size,
+                                    pendingCount = show.episodes.size,
+                                    downloadedCount = 0,
+                                    subscribed = false,
+                                    imageUrl = show.imageUrl,
+                                    detailUrl = "/shows/${show.uuid}",
+                                ))
+                            })
+                        }
+                        if (show.serials.isEmpty() && show.episodes.isEmpty()) {
+                            // Show with no content yet
+                            append(createHTML().div {
+                                contentUnitCard(ContentUnit(
+                                    uuid = show.uuid,
+                                    title = show.title,
+                                    type = ContentUnitType.SHOW,
+                                    episodeCount = 0,
+                                    pendingCount = 0,
+                                    downloadedCount = 0,
+                                    subscribed = false,
+                                    imageUrl = show.imageUrl,
+                                    detailUrl = "/shows/${show.uuid}",
+                                ))
+                            })
                         }
                     }
                     call.respondText(html, contentType = ContentType.Text.Html)
@@ -735,6 +771,45 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
 }
 
 // --- Helpers ---
+
+private suspend fun respondSerialDetail(call: ApplicationCall, serialUuid: String, urlSigner: UrlSigner) {
+    val serialData = transaction {
+        Serials.selectAll().where { Serials.uuid eq serialUuid }.firstOrNull()
+    } ?: return call.respond(HttpStatusCode.NotFound, "Serial not found")
+
+    val showData = transaction {
+        Shows.selectAll().where { Shows.uuid eq serialData[Serials.showUuid] }.firstOrNull()
+    }
+
+    val episodes = transaction {
+        Episodes.selectAll().where { Episodes.serialUuid eq serialUuid }
+            .orderBy(Episodes.part)
+            .map { it.toEpisodeRow(urlSigner) }
+    }
+
+    val m4bPath = serialData[Serials.m4bPath]
+    val serialRow = SerialRow(
+        uuid = serialData[Serials.uuid],
+        showUuid = serialData[Serials.showUuid],
+        title = serialData[Serials.title],
+        totalParts = serialData[Serials.totalParts],
+        pendingCount = episodes.count { it.status == EpisodeStatus.PENDING },
+        downloadedCount = episodes.count { it.status == EpisodeStatus.DOWNLOADED },
+        lastEpisodeSince = serialData[Serials.lastEpisodeSince],
+        m4bDownloadUrl = if (m4bPath != null) urlSigner.sign(File(m4bPath)) else null,
+    )
+
+    call.respondHtml {
+        layout("${serialRow.title} - mujrozhlas-dl") {
+            serialDetail(
+                serialRow,
+                episodes,
+                parentShowTitle = showData?.get(Shows.title),
+                parentShowSubscribed = showData?.get(Shows.subscribed) ?: false,
+            )
+        }
+    }
+}
 
 /**
  * Try to resolve a UUID by probing the API as episode, serial, and show.
