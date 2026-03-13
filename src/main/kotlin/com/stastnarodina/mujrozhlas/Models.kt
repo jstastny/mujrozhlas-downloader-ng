@@ -10,6 +10,12 @@ import kotlinx.serialization.json.JsonElement
 data class JsonApiListResponse(
     val data: List<JsonApiResource>,
     val meta: JsonApiMeta? = null,
+    val links: JsonApiLinks? = null,
+)
+
+@Serializable
+data class JsonApiLinks(
+    val next: String? = null,
 )
 
 @Serializable

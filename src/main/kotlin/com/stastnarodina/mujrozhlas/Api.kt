@@ -1,7 +1,6 @@
 package com.stastnarodina.mujrozhlas
 
 import kotlinx.serialization.json.*
-import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
@@ -19,11 +18,8 @@ class Api(
     // --- Shows ---
 
     fun searchShows(query: String): List<Show> {
-        val url = "$baseUrl/shows".toHttpUrl().newBuilder()
-            .addQueryParameter("filter[title][like]", query)
-            .addQueryParameter("page[limit]", "20")
-            .build()
-        val body = fetch(url.toString())
+        val encoded = java.net.URLEncoder.encode(query, "UTF-8")
+        val body = fetch("$baseUrl/shows?filter[title][like]=$encoded&page[limit]=20")
         return json.decodeFromString<JsonApiListResponse>(body).data.map { parseShow(it) }
     }
 
@@ -33,31 +29,21 @@ class Api(
     }
 
     fun getShowEpisodes(showUuid: String): List<Episode> {
-        val url = "$baseUrl/shows/$showUuid/episodes".toHttpUrl().newBuilder()
-            .addQueryParameter("page[limit]", "10000")
-            .build()
-        val body = fetch(url.toString())
-        return json.decodeFromString<JsonApiListResponse>(body).data
+        return fetchAllPages("$baseUrl/shows/$showUuid/episodes?page[limit]=500")
             .map { parseEpisode(it) }
             .sortedBy { it.orderNumber }
     }
 
     fun getShowSerials(showUuid: String): List<Serial> {
-        val url = "$baseUrl/shows/$showUuid/serials".toHttpUrl().newBuilder()
-            .addQueryParameter("page[limit]", "100")
-            .build()
-        val body = fetch(url.toString())
-        return json.decodeFromString<JsonApiListResponse>(body).data.map { parseSerial(it) }
+        return fetchAllPages("$baseUrl/shows/$showUuid/serials?page[limit]=500")
+            .map { parseSerial(it) }
     }
 
     // --- Serials ---
 
     fun searchSerials(query: String): List<Serial> {
-        val url = "$baseUrl/serials".toHttpUrl().newBuilder()
-            .addQueryParameter("filter[title][like]", query)
-            .addQueryParameter("page[limit]", "20")
-            .build()
-        val body = fetch(url.toString())
+        val encoded = java.net.URLEncoder.encode(query, "UTF-8")
+        val body = fetch("$baseUrl/serials?filter[title][like]=$encoded&page[limit]=20")
         return json.decodeFromString<JsonApiListResponse>(body).data.map { parseSerial(it) }
     }
 
@@ -67,11 +53,7 @@ class Api(
     }
 
     fun getSerialEpisodes(serialUuid: String): List<Episode> {
-        val url = "$baseUrl/serials/$serialUuid/episodes".toHttpUrl().newBuilder()
-            .addQueryParameter("page[limit]", "10000")
-            .build()
-        val body = fetch(url.toString())
-        return json.decodeFromString<JsonApiListResponse>(body).data
+        return fetchAllPages("$baseUrl/serials/$serialUuid/episodes?page[limit]=500")
             .map { parseEpisode(it) }
             .sortedBy { it.orderNumber }
     }
@@ -79,20 +61,13 @@ class Api(
     // --- Episodes ---
 
     fun getRecentEpisodes(limit: Int = 200): List<Episode> {
-        val url = "$baseUrl/episodes".toHttpUrl().newBuilder()
-            .addQueryParameter("sort", "-since")
-            .addQueryParameter("page[limit]", limit.toString())
-            .build()
-        val body = fetch(url.toString())
+        val body = fetch("$baseUrl/episodes?sort=-since&page[limit]=$limit")
         return json.decodeFromString<JsonApiListResponse>(body).data.map { parseEpisode(it) }
     }
 
     fun searchEpisodes(query: String): List<Episode> {
-        val url = "$baseUrl/episodes".toHttpUrl().newBuilder()
-            .addQueryParameter("filter[title][like]", query)
-            .addQueryParameter("page[limit]", "20")
-            .build()
-        val body = fetch(url.toString())
+        val encoded = java.net.URLEncoder.encode(query, "UTF-8")
+        val body = fetch("$baseUrl/episodes?filter[title][like]=$encoded&page[limit]=20")
         return json.decodeFromString<JsonApiListResponse>(body).data.map { parseEpisode(it) }
     }
 
@@ -111,10 +86,24 @@ class Api(
 
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
-                throw RuntimeException("API request failed: ${response.code} ${response.message} for $url")
+                throw RuntimeException("API request failed: ${response.code} for $url")
             }
             return response.body.string()
         }
+    }
+
+    private fun fetchAllPages(firstUrl: String): List<JsonApiResource> {
+        val all = mutableListOf<JsonApiResource>()
+        var url: String? = firstUrl
+
+        while (url != null) {
+            val body = fetch(url)
+            val page = json.decodeFromString<JsonApiListResponse>(body)
+            all.addAll(page.data)
+            url = page.links?.next
+        }
+
+        return all
     }
 
     // --- Parsing ---
