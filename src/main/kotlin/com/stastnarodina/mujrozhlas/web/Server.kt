@@ -402,6 +402,26 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                 call.respondText("", contentType = ContentType.Text.Html)
             }
 
+            post("/shows/{uuid}/unsubscribe") {
+                val uuid = call.parameters["uuid"] ?: return@post call.respond(HttpStatusCode.BadRequest)
+
+                transaction {
+                    Shows.update({ Shows.uuid eq uuid }) { it[subscribed] = false }
+                }
+
+                // Revert APPROVED episodes back to PENDING
+                val reverted = transaction {
+                    Episodes.update({
+                        (Episodes.showUuid eq uuid) and
+                                (Episodes.status eq EpisodeStatus.APPROVED)
+                    }) { it[status] = EpisodeStatus.PENDING }
+                }
+
+                serverLog.info("Unsubscribed show $uuid, reverted $reverted episode(s) to PENDING")
+                call.response.header("HX-Refresh", "true")
+                call.respondText("", contentType = ContentType.Text.Html)
+            }
+
             post("/shows/{uuid}/approve-all") {
                 val uuid = call.parameters["uuid"] ?: return@post call.respond(HttpStatusCode.BadRequest)
 

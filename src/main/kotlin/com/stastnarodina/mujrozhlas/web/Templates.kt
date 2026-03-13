@@ -241,10 +241,6 @@ fun FlowContent.contentUnitCard(unit: ContentUnit) {
                     }
                 }
                 div {
-                    if (unit.subscribed) {
-                        span("badge badge-subscribed") { +"subscribed" }
-                        +" "
-                    }
                     if (unit.pendingCount > 0) {
                         span("badge badge-pending") { +"${unit.pendingCount} pending" }
                         +" "
@@ -253,7 +249,15 @@ fun FlowContent.contentUnitCard(unit: ContentUnit) {
                         span("badge badge-downloaded") { +"${unit.downloadedCount} downloaded" }
                         +" "
                     }
-                    if (!unit.subscribed) {
+                    if (unit.subscribed) {
+                        button {
+                            attributes["class"] = "outline contrast"
+                            attributes["hx-post"] = "/shows/$showUuid/unsubscribe"
+                            attributes["hx-confirm"] = "Unsubscribe from '${unit.title}'? Queued downloads will be cancelled."
+                            style = "margin-left: 0.5rem; padding: 4px 12px; font-size: 0.85em;"
+                            +"Unsubscribe"
+                        }
+                    } else {
                         button {
                             attributes["class"] = "outline"
                             attributes["hx-post"] = "/shows/$showUuid/subscribe"
@@ -299,7 +303,13 @@ fun MAIN.showDetail(
                     +"Subscribe"
                 }
             } else {
-                span("badge badge-subscribed") { +"subscribed" }
+                button {
+                    attributes["class"] = "outline contrast"
+                    attributes["hx-post"] = "/shows/${show.uuid}/unsubscribe"
+                    attributes["hx-confirm"] = "Unsubscribe? Queued downloads will be cancelled."
+                    style = "margin-right: 0.5rem;"
+                    +"Unsubscribe"
+                }
             }
         }
     }
@@ -374,8 +384,13 @@ fun MAIN.serialDetail(serial: SerialRow, episodes: List<EpisodeRow>, parentShowT
         }
         div {
             if (parentShowSubscribed) {
-                span("badge badge-subscribed") { +"subscribed" }
-                +" "
+                button {
+                    attributes["class"] = "outline contrast"
+                    attributes["hx-post"] = "/shows/${serial.showUuid}/unsubscribe"
+                    attributes["hx-confirm"] = "Unsubscribe? Queued downloads will be cancelled."
+                    style = "margin-right: 0.5rem;"
+                    +"Unsubscribe"
+                }
             } else {
                 button {
                     attributes["hx-post"] = "/shows/${serial.showUuid}/subscribe"

@@ -87,6 +87,13 @@ class DownloadQueue(
             return
         }
 
+        // Skip if the episode was reverted (e.g. unsubscribe) while queued
+        if (episodeData[Episodes.status] != EpisodeStatus.APPROVED) {
+            log.info("Skipping episode $episodeUuid (status: ${episodeData[Episodes.status]})")
+            currentDownload = null
+            return
+        }
+
         val audioUrl = episodeData[Episodes.hlsUrl]
         val audioVariant = episodeData[Episodes.audioVariant]
         if (audioUrl == null) {
