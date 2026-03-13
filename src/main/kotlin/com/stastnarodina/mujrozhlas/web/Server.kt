@@ -164,7 +164,7 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
 
                 call.respondHtml {
                     layout("Dashboard - mujrozhlas-dl") {
-                        dashboard(units, discoverer.isDiscovering)
+                        dashboard(units, discoverer.isDiscovering, discoverer.isRefreshing)
                     }
                 }
             }
@@ -582,7 +582,7 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                 respondEpisodeRow(call, uuid, urlSigner)
             }
 
-            // --- Discovery ---
+            // --- Discover & Refresh ---
 
             post("/discover") {
                 discoverer.discoverNow()
@@ -606,6 +606,38 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                         attributes["hx-trigger"] = "every 2s"
                         attributes["hx-swap"] = "outerHTML"
                         +"Discovering..."
+                        +" "
+                        span { attributes["aria-busy"] = "true" }
+                    }
+                    call.respondText(html, contentType = ContentType.Text.Html)
+                } else {
+                    call.response.header("HX-Refresh", "true")
+                    call.respondText("", contentType = ContentType.Text.Html)
+                }
+            }
+
+            post("/refresh") {
+                discoverer.refreshNow()
+                val html = createHTML().span {
+                    id = "refresh-status"
+                    attributes["hx-get"] = "/refresh/status"
+                    attributes["hx-trigger"] = "every 2s"
+                    attributes["hx-swap"] = "outerHTML"
+                    +"Refreshing..."
+                    +" "
+                    span { attributes["aria-busy"] = "true" }
+                }
+                call.respondText(html, contentType = ContentType.Text.Html)
+            }
+
+            get("/refresh/status") {
+                if (discoverer.isRefreshing) {
+                    val html = createHTML().span {
+                        id = "refresh-status"
+                        attributes["hx-get"] = "/refresh/status"
+                        attributes["hx-trigger"] = "every 2s"
+                        attributes["hx-swap"] = "outerHTML"
+                        +"Refreshing..."
                         +" "
                         span { attributes["aria-busy"] = "true" }
                     }

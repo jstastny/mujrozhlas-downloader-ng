@@ -125,11 +125,12 @@ fun HTML.layout(pageTitle: String, content: MAIN.() -> Unit) {
 
 // --- Dashboard ---
 
-fun MAIN.dashboard(units: List<ContentUnit>, isDiscovering: Boolean) {
+fun MAIN.dashboard(units: List<ContentUnit>, isDiscovering: Boolean, isRefreshing: Boolean) {
     div {
         style = "display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;"
         h1 { +"Dashboard" }
         div {
+            style = "display: flex; gap: 0.5rem; align-items: center;"
             if (isDiscovering) {
                 span {
                     id = "discover-status"
@@ -144,9 +145,28 @@ fun MAIN.dashboard(units: List<ContentUnit>, isDiscovering: Boolean) {
                     attributes["hx-post"] = "/discover"
                     attributes["hx-target"] = "#discover-status"
                     attributes["hx-swap"] = "outerHTML"
-                    +"Discover Now"
+                    +"Discover"
                 }
                 span { id = "discover-status" }
+            }
+            if (isRefreshing) {
+                span {
+                    id = "refresh-status"
+                    attributes["hx-get"] = "/refresh/status"
+                    attributes["hx-trigger"] = "every 2s"
+                    attributes["hx-swap"] = "outerHTML"
+                    +"Refreshing..."
+                    span { attributes["aria-busy"] = "true" }
+                }
+            } else {
+                button {
+                    attributes["class"] = "outline"
+                    attributes["hx-post"] = "/refresh"
+                    attributes["hx-target"] = "#refresh-status"
+                    attributes["hx-swap"] = "outerHTML"
+                    +"Refresh Subscribed"
+                }
+                span { id = "refresh-status" }
             }
         }
     }

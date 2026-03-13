@@ -23,10 +23,15 @@ class Discoverer(
     var isDiscovering = false
         private set
 
+    @Volatile
+    var isRefreshing = false
+        private set
+
     fun start(intervalHours: Long = 6) {
         periodicJob = scope.launch {
             while (isActive) {
-                runDiscovery()
+                runDiscover()
+                runRefresh()
                 delay(intervalHours * 3600 * 1000)
             }
         }
@@ -34,28 +39,33 @@ class Discoverer(
 
     fun discoverNow() {
         if (isDiscovering) return
-        scope.launch { runDiscovery() }
+        scope.launch { runDiscover() }
     }
 
-    /** Cancel periodic discovery and wait for any in-progress run to finish. */
+    fun refreshNow() {
+        if (isRefreshing) return
+        scope.launch { runRefresh() }
+    }
+
+    /** Cancel periodic jobs and wait for any in-progress run to finish. */
     suspend fun shutdown() {
         log.info("Shutting down discoverer...")
         periodicJob?.cancelAndJoin()
         log.info("Discoverer stopped")
     }
 
-    suspend fun runDiscovery() {
+    /**
+     * Discover: find new content from recent episodes.
+     * Does NOT touch subscribed shows.
+     */
+    suspend fun runDiscover() {
         if (isDiscovering) return
         isDiscovering = true
         log.info("Starting discovery...")
 
         try {
             withContext(Dispatchers.IO) {
-                // Phase 1: Discover new content from recent episodes
                 discoverRecentContent()
-
-                // Phase 2: Re-scan subscribed shows for updates
-                rescanSubscribedShows()
             }
         } catch (e: Exception) {
             log.error("Discovery failed: ${e.message}", e)
@@ -66,7 +76,28 @@ class Discoverer(
     }
 
     /**
-     * Phase 1: Fetch recent episodes from the API, discover their parent
+     * Refresh: re-scan subscribed shows for new episodes and
+     * update audio links for episodes that previously had none.
+     */
+    suspend fun runRefresh() {
+        if (isRefreshing) return
+        isRefreshing = true
+        log.info("Starting refresh of subscribed shows...")
+
+        try {
+            withContext(Dispatchers.IO) {
+                refreshSubscribedShows()
+            }
+        } catch (e: Exception) {
+            log.error("Refresh failed: ${e.message}", e)
+        } finally {
+            isRefreshing = false
+            log.info("Refresh complete")
+        }
+    }
+
+    /**
+     * Fetch recent episodes from the API, discover their parent
      * shows and serials, then fetch the FULL episode lists for each
      * newly discovered serial/show.
      */
@@ -238,11 +269,11 @@ class Discoverer(
     }
 
     /**
-     * Phase 2: Re-scan subscribed shows — fetch all their serials and episodes
-     * from the API and upsert any new content. Auto-approve new episodes.
-     * Also checks if previously unavailable episodes now have audio.
+     * Refresh subscribed shows: fetch all their serials and episodes
+     * from the API, upsert new content, and update audio links for
+     * episodes that previously had no audio.
      */
-    private fun rescanSubscribedShows() {
+    private fun refreshSubscribedShows() {
         val subscribedShows = transaction {
             Shows.selectAll()
                 .where { Shows.subscribed eq true }
@@ -250,20 +281,20 @@ class Discoverer(
         }
 
         if (subscribedShows.isEmpty()) return
-        log.info("Re-scanning ${subscribedShows.size} subscribed show(s)")
+        log.info("Refreshing ${subscribedShows.size} subscribed show(s)")
 
         for (showUuid in subscribedShows) {
             try {
                 processSubscribedShow(showUuid)
             } catch (e: Exception) {
-                log.error("Error re-scanning show $showUuid: ${e.message}")
+                log.error("Error refreshing show $showUuid: ${e.message}")
             }
         }
     }
 
     private fun processSubscribedShow(showUuid: String) {
         val show = api.getShow(showUuid)
-        log.info("Re-scanning subscribed show: '${show.title}'")
+        log.info("Refreshing subscribed show: '${show.title}'")
 
         // Update show metadata
         transaction {
@@ -295,16 +326,11 @@ class Discoverer(
     }
 
     /**
-     * For subscribed shows: check if PENDING episodes with duration=0
-     * now have audio available, and if so, approve and enqueue them.
+     * Check if PENDING episodes with duration=0 now have audio
+     * available, and if so, update and approve them.
      */
     private fun refreshPendingEpisodes(showUuid: String, serialUuid: String?) {
         if (downloadQueue == null) return
-
-        val isSubscribed = transaction {
-            Shows.selectAll().where { (Shows.uuid eq showUuid) and (Shows.subscribed eq true) }.count() > 0
-        }
-        if (!isSubscribed) return
 
         val pendingNoAudio = transaction {
             val query = if (serialUuid != null) {
