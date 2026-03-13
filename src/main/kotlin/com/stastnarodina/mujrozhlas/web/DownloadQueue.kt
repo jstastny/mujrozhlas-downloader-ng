@@ -123,13 +123,16 @@ class DownloadQueue(
 
         val episodeNumber = episodeData[Episodes.part]
             ?: episodeData[Episodes.seriesEpisodeNumber]
-            ?: 0
 
         val containerDir = File(outputDir, Downloader.sanitizeFilename(containerTitle))
         containerDir.mkdirs()
 
-        val padWidth = Downloader.digitCount(episodeNumber)
-        val baseName = "%0${padWidth}d - %s".format(episodeNumber, Downloader.sanitizeFilename(containerTitle))
+        val baseName = if (episodeNumber != null) {
+            val padWidth = Downloader.digitCount(episodeNumber)
+            "%0${padWidth}d - %s".format(episodeNumber, Downloader.sanitizeFilename(containerTitle))
+        } else {
+            Downloader.sanitizeFilename(episodeData[Episodes.title])
+        }
         val extension = if (audioVariant == "mp3") "mp3" else "m4a"
         val outputFile = File(containerDir, "$baseName.$extension")
 
