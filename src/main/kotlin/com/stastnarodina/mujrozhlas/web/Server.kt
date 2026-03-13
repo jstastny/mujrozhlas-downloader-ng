@@ -569,6 +569,130 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                 }
             }
 
+            // --- Search ---
+
+            get("/search") {
+                call.respondHtml {
+                    layout("Search - mujrozhlas-dl") {
+                        searchPage()
+                    }
+                }
+            }
+
+            get("/search/results") {
+                val query = call.request.queryParameters["q"]?.trim() ?: ""
+                if (query.length < 2) {
+                    call.respondText("", contentType = ContentType.Text.Html)
+                    return@get
+                }
+
+                val knownShowUuids = transaction {
+                    Shows.selectAll().map { it[Shows.uuid] }.toSet()
+                }
+                val knownSerialUuids = transaction {
+                    Serials.selectAll().map { it[Serials.uuid] }.toSet()
+                }
+
+                val results = mutableListOf<SearchResult>()
+
+                try {
+                    val shows = api.searchShows(query)
+                    for (show in shows) {
+                        results.add(SearchResult(
+                            uuid = show.uuid,
+                            title = show.title,
+                            type = "show",
+                            detail = null,
+                            imageUrl = show.imageUrl,
+                            alreadyAdded = show.uuid in knownShowUuids,
+                        ))
+                    }
+                } catch (e: Exception) {
+                    serverLog.warn("Show search failed for '$query': ${e.message}")
+                }
+
+                try {
+                    val serials = api.searchSerials(query)
+                    for (serial in serials) {
+                        results.add(SearchResult(
+                            uuid = serial.uuid,
+                            title = serial.title,
+                            type = "serial",
+                            detail = "${serial.totalParts} parts",
+                            imageUrl = serial.imageUrl,
+                            alreadyAdded = serial.uuid in knownSerialUuids,
+                        ))
+                    }
+                } catch (e: Exception) {
+                    serverLog.warn("Serial search failed for '$query': ${e.message}")
+                }
+
+                val html = createHTML().div {
+                    searchResults(results)
+                }
+                call.respondText(html, contentType = ContentType.Text.Html)
+            }
+
+            post("/search/add") {
+                val params = call.receiveParameters()
+                val uuid = params["uuid"] ?: return@post call.respond(HttpStatusCode.BadRequest)
+                val type = params["type"] ?: return@post call.respond(HttpStatusCode.BadRequest)
+
+                try {
+                    val result = when (type) {
+                        "show" -> {
+                            val show = api.getShow(uuid)
+                            val serials = api.getShowSerials(uuid).map { serial ->
+                                serial.copy(episodes = api.getSerialEpisodes(serial.uuid))
+                            }
+                            val allEpisodes = api.getShowEpisodes(uuid)
+                            val serialEpUuids = serials.flatMap { s -> s.episodes.map { it.uuid } }.toSet()
+                            val populatedShow = show.copy(
+                                serials = serials,
+                                episodes = allEpisodes.filter { it.uuid !in serialEpUuids },
+                            )
+                            insertShow(populatedShow)
+                            SearchResult(show.uuid, show.title, "show", null, show.imageUrl, true)
+                        }
+                        "serial" -> {
+                            val serial = api.getSerial(uuid)
+                            val showUuid = serial.showUuid
+                                ?: throw RuntimeException("Serial has no parent show")
+                            val parentShow = api.getShow(showUuid)
+                            val episodes = api.getSerialEpisodes(uuid)
+                            insertShow(parentShow.copy(
+                                serials = listOf(serial.copy(episodes = episodes)),
+                                episodes = emptyList(),
+                            ))
+                            SearchResult(serial.uuid, serial.title, "serial", "${serial.totalParts} parts", serial.imageUrl, true)
+                        }
+                        "episode" -> {
+                            val episode = api.getEpisode(uuid)
+                            val showUuid = episode.showUuid
+                                ?: throw RuntimeException("Episode has no parent show")
+                            val parentShow = api.getShow(showUuid)
+                            insertShow(parentShow.copy(
+                                serials = emptyList(),
+                                episodes = listOf(episode),
+                            ))
+                            SearchResult(episode.uuid, episode.title, "episode", null, null, true)
+                        }
+                        else -> throw RuntimeException("Unknown type: $type")
+                    }
+
+                    val html = createHTML().div {
+                        searchResultAdded(result)
+                    }
+                    call.respondText(html, contentType = ContentType.Text.Html)
+                } catch (e: Exception) {
+                    serverLog.error("Failed to add $type $uuid from search", e)
+                    call.respondText(
+                        "<article style='padding:0.75rem 1rem;margin-bottom:0.5rem;'><p>Error: ${e.message}</p></article>",
+                        contentType = ContentType.Text.Html,
+                    )
+                }
+            }
+
             // --- Downloads ---
 
             get("/downloads") {

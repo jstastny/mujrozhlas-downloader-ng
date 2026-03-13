@@ -96,6 +96,7 @@ fun HTML.layout(pageTitle: String, content: MAIN.() -> Unit) {
             }
             ul {
                 li { a(href = "/") { +"Dashboard" } }
+                li { a(href = "/search") { +"Search" } }
                 li { a(href = "/downloads") { +"Downloads" } }
             }
         }
@@ -453,6 +454,112 @@ fun TBODY.episodeRow(episode: EpisodeRow) {
                     }
                 }
                 else -> {}
+            }
+        }
+    }
+}
+
+// --- Search page ---
+
+data class SearchResult(
+    val uuid: String,
+    val title: String,
+    val type: String,         // "show", "serial", "episode"
+    val detail: String?,      // e.g. "15 parts" or "Part 3"
+    val imageUrl: String?,
+    val alreadyAdded: Boolean,
+)
+
+fun MAIN.searchPage() {
+    h1 { +"Search" }
+
+    input {
+        type = InputType.search
+        name = "q"
+        placeholder = "Search shows, serials, episodes..."
+        attributes["hx-get"] = "/search/results"
+        attributes["hx-trigger"] = "keyup changed delay:400ms, search"
+        attributes["hx-target"] = "#search-results"
+        attributes["hx-indicator"] = "#search-spinner"
+        style = "margin-bottom: 1rem;"
+    }
+
+    span {
+        id = "search-spinner"
+        attributes["class"] = "htmx-indicator"
+        attributes["aria-busy"] = "true"
+    }
+
+    div { id = "search-results" }
+}
+
+fun FlowContent.searchResults(results: List<SearchResult>) {
+    if (results.isEmpty()) {
+        p { +"No results found." }
+        return
+    }
+
+    for (result in results) {
+        article {
+            attributes["class"] = "search-result"
+            style = "padding: 0.75rem 1rem; margin-bottom: 0.5rem;"
+            div {
+                style = "display: flex; justify-content: space-between; align-items: center;"
+                div {
+                    strong { +result.title }
+                    +" "
+                    val badgeClass = when (result.type) {
+                        "show" -> "badge-approved"
+                        "serial" -> "badge-subscribed"
+                        else -> "badge-pending"
+                    }
+                    span("badge $badgeClass") { +result.type }
+                    result.detail?.let {
+                        +" "
+                        small { +it }
+                    }
+                }
+                div {
+                    if (result.alreadyAdded) {
+                        span("badge badge-downloaded") { +"Added" }
+                    } else {
+                        button {
+                            attributes["hx-post"] = "/search/add"
+                            attributes["hx-vals"] = """{"uuid":"${result.uuid}","type":"${result.type}"}"""
+                            attributes["hx-target"] = "closest article"
+                            attributes["hx-swap"] = "outerHTML"
+                            style = "padding: 4px 16px; font-size: 0.85em;"
+                            +"Add"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fun FlowContent.searchResultAdded(result: SearchResult) {
+    article {
+        attributes["class"] = "search-result"
+        style = "padding: 0.75rem 1rem; margin-bottom: 0.5rem;"
+        div {
+            style = "display: flex; justify-content: space-between; align-items: center;"
+            div {
+                strong { +result.title }
+                +" "
+                val badgeClass = when (result.type) {
+                    "show" -> "badge-approved"
+                    "serial" -> "badge-subscribed"
+                    else -> "badge-pending"
+                }
+                span("badge $badgeClass") { +result.type }
+                result.detail?.let {
+                    +" "
+                    small { +it }
+                }
+            }
+            div {
+                span("badge badge-downloaded") { +"Added" }
             }
         }
     }
