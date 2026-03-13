@@ -56,21 +56,20 @@ class Discoverer(
     }
 
     /**
-     * Phase 1: Fetch recent episodes from the API and upsert any new
-     * shows, serials, and episodes into the database.
-     * Everything discovered this way starts as non-subscribed / PENDING.
+     * Phase 1: Fetch recent episodes from the API, discover their parent
+     * shows and serials, then fetch the FULL episode lists for each
+     * newly discovered serial/show.
      */
     private fun discoverRecentContent() {
         val recentEpisodes = api.getRecentEpisodes(200)
         log.info("Fetched ${recentEpisodes.size} recent episodes for discovery")
 
-        // Extract unique show UUIDs and serial UUIDs
         val showUuids = recentEpisodes.mapNotNull { it.showUuid }.distinct()
         val serialUuids = recentEpisodes.mapNotNull { it.serialUuid }.distinct()
 
         log.info("Found ${showUuids.size} shows, ${serialUuids.size} serials in recent episodes")
 
-        // Upsert shows
+        // Upsert shows (metadata only)
         for (showUuid in showUuids) {
             try {
                 ensureShow(showUuid)
@@ -79,17 +78,14 @@ class Discoverer(
             }
         }
 
-        // Upsert serials (fetch full serial details to get showUuid)
+        // Upsert serials and fetch full episode lists for new ones
         for (serialUuid in serialUuids) {
             try {
-                ensureSerial(serialUuid)
+                ensureSerialWithEpisodes(serialUuid)
             } catch (e: Exception) {
                 log.error("Error upserting serial $serialUuid: ${e.message}")
             }
         }
-
-        // Upsert episodes
-        upsertEpisodes(recentEpisodes)
     }
 
     /**
@@ -121,27 +117,26 @@ class Discoverer(
     }
 
     /**
-     * Ensure a serial exists in the DB. If not, fetch from API and insert.
-     * Also ensures the parent show exists.
+     * Ensure a serial exists in the DB (and its parent show).
+     * For newly discovered serials, fetch and insert ALL episodes.
      */
-    private fun ensureSerial(serialUuid: String) {
+    private fun ensureSerialWithEpisodes(serialUuid: String) {
         val exists = transaction {
             Serials.selectAll().where { Serials.uuid eq serialUuid }.count() > 0
         }
 
         val serial = api.getSerial(serialUuid)
 
-        // Ensure parent show exists
-        if (serial.showUuid != null) {
-            try {
-                ensureShow(serial.showUuid)
-            } catch (e: Exception) {
-                log.error("Error ensuring parent show for serial $serialUuid: ${e.message}")
-            }
-        }
-
         if (serial.showUuid == null) {
             log.warn("Serial '${serial.title}' ($serialUuid) has no parent show, skipping")
+            return
+        }
+
+        // Ensure parent show exists
+        try {
+            ensureShow(serial.showUuid)
+        } catch (e: Exception) {
+            log.error("Error ensuring parent show for serial $serialUuid: ${e.message}")
             return
         }
 
@@ -165,45 +160,45 @@ class Discoverer(
                 }
             }
         }
+
+        // Fetch and upsert all episodes for this serial
+        val allEpisodes = api.getSerialEpisodes(serialUuid)
+        upsertEpisodes(allEpisodes, serial.showUuid, serialUuid)
     }
 
     /**
-     * Upsert a list of episodes into the DB. New episodes get PENDING status.
+     * Insert episodes that are not yet in the DB. New episodes get PENDING status.
      * Episodes for subscribed shows with audio get auto-APPROVED.
      */
-    private fun upsertEpisodes(episodes: List<Episode>) {
+    private fun upsertEpisodes(
+        episodes: List<Episode>,
+        showUuid: String,
+        serialUuid: String?,
+    ) {
         val knownUuids = transaction {
-            Episodes.selectAll().map { it[Episodes.uuid] }.toSet()
-        }
-
-        val subscribedShows = transaction {
-            Shows.selectAll().where { Shows.subscribed eq true }
-                .map { it[Shows.uuid] }.toSet()
+            val query = if (serialUuid != null) {
+                Episodes.selectAll().where { Episodes.serialUuid eq serialUuid }
+            } else {
+                Episodes.selectAll().where {
+                    (Episodes.showUuid eq showUuid) and Episodes.serialUuid.isNull()
+                }
+            }
+            query.map { it[Episodes.uuid] }.toSet()
         }
 
         val newEpisodes = episodes.filter { it.uuid !in knownUuids }
         if (newEpisodes.isEmpty()) return
 
-        log.info("Inserting ${newEpisodes.size} new episodes")
+        val isSubscribed = transaction {
+            Shows.selectAll().where { (Shows.uuid eq showUuid) and (Shows.subscribed eq true) }.count() > 0
+        }
+
+        log.info("  Inserting ${newEpisodes.size} new episode(s) for ${serialUuid ?: "show $showUuid"}")
 
         transaction {
             for (ep in newEpisodes) {
-                val showUuid = ep.showUuid ?: continue
-
-                // Ensure show exists (might have been missed)
-                val showExists = Shows.selectAll().where { Shows.uuid eq showUuid }.count() > 0
-                if (!showExists) continue
-
-                // If episode has a serial, ensure serial exists
-                if (ep.serialUuid != null) {
-                    val serialExists = Serials.selectAll()
-                        .where { Serials.uuid eq ep.serialUuid }.count() > 0
-                    if (!serialExists) continue
-                }
-
                 val hlsLink = ep.audioLinks.firstOrNull { it.variant == "hls" }
                 val duration = hlsLink?.duration ?: 0
-                val isSubscribed = showUuid in subscribedShows
                 val initialStatus = if (isSubscribed && duration > 0) {
                     EpisodeStatus.APPROVED
                 } else {
@@ -213,7 +208,7 @@ class Discoverer(
                 Episodes.insert {
                     it[uuid] = ep.uuid
                     it[Episodes.showUuid] = showUuid
-                    it[Episodes.serialUuid] = ep.serialUuid
+                    it[Episodes.serialUuid] = serialUuid
                     it[title] = ep.title
                     it[part] = ep.part
                     it[seriesEpisodeNumber] = ep.seriesEpisodeNumber
@@ -234,6 +229,7 @@ class Discoverer(
     /**
      * Phase 2: Re-scan subscribed shows — fetch all their serials and episodes
      * from the API and upsert any new content. Auto-approve new episodes.
+     * Also checks if previously unavailable episodes now have audio.
      */
     private fun rescanSubscribedShows() {
         val subscribedShows = transaction {
@@ -267,36 +263,11 @@ class Discoverer(
             }
         }
 
-        // Sync serials
+        // Sync serials and their episodes
         val apiSerials = api.getShowSerials(showUuid)
         for (serial in apiSerials) {
-            val serialExists = transaction {
-                Serials.selectAll().where { Serials.uuid eq serial.uuid }.count() > 0
-            }
-            transaction {
-                if (!serialExists) {
-                    log.info("  New serial: '${serial.title}'")
-                    Serials.insert {
-                        it[uuid] = serial.uuid
-                        it[Serials.showUuid] = showUuid
-                        it[title] = serial.title
-                        it[totalParts] = serial.totalParts
-                        it[lastEpisodeSince] = serial.lastEpisodeSince
-                        it[imageUrl] = serial.imageUrl
-                    }
-                } else {
-                    Serials.update({ Serials.uuid eq serial.uuid }) {
-                        it[title] = serial.title
-                        it[totalParts] = serial.totalParts
-                        it[lastEpisodeSince] = serial.lastEpisodeSince
-                        it[imageUrl] = serial.imageUrl
-                    }
-                }
-            }
-
-            // Sync serial episodes
-            val serialEpisodes = api.getSerialEpisodes(serial.uuid)
-            syncEpisodes(showUuid, serial.uuid, serialEpisodes, true, serial.title)
+            ensureSerialWithEpisodes(serial.uuid)
+            refreshPendingEpisodes(showUuid, serial.uuid)
         }
 
         // Sync direct show episodes (not in any serial)
@@ -307,103 +278,73 @@ class Discoverer(
         val directEpisodes = showEpisodes.filter { it.uuid !in serialEpisodeUuids }
 
         if (directEpisodes.isNotEmpty()) {
-            syncEpisodes(showUuid, null, directEpisodes, true, show.title)
+            upsertEpisodes(directEpisodes, showUuid, null)
+            refreshPendingEpisodes(showUuid, null)
         }
     }
 
-    private fun syncEpisodes(
-        showUuid: String,
-        serialUuid: String?,
-        apiEpisodes: List<Episode>,
-        isSubscribed: Boolean,
-        containerTitle: String,
-    ) {
-        val knownUuids = transaction {
+    /**
+     * For subscribed shows: check if PENDING episodes with duration=0
+     * now have audio available, and if so, approve and enqueue them.
+     */
+    private fun refreshPendingEpisodes(showUuid: String, serialUuid: String?) {
+        if (downloadQueue == null) return
+
+        val isSubscribed = transaction {
+            Shows.selectAll().where { (Shows.uuid eq showUuid) and (Shows.subscribed eq true) }.count() > 0
+        }
+        if (!isSubscribed) return
+
+        val pendingNoAudio = transaction {
             val query = if (serialUuid != null) {
-                Episodes.selectAll().where { Episodes.serialUuid eq serialUuid }
+                Episodes.selectAll().where {
+                    (Episodes.serialUuid eq serialUuid) and
+                            (Episodes.status eq EpisodeStatus.PENDING) and
+                            (Episodes.duration eq 0)
+                }
             } else {
                 Episodes.selectAll().where {
-                    (Episodes.showUuid eq showUuid) and Episodes.serialUuid.isNull()
+                    (Episodes.showUuid eq showUuid) and
+                            Episodes.serialUuid.isNull() and
+                            (Episodes.status eq EpisodeStatus.PENDING) and
+                            (Episodes.duration eq 0)
                 }
             }
             query.map { it[Episodes.uuid] }.toSet()
         }
 
-        val newEpisodes = apiEpisodes.filter { it.uuid !in knownUuids }
-        if (newEpisodes.isNotEmpty()) {
-            log.info("  '$containerTitle': ${newEpisodes.size} new episode(s)")
-            transaction {
-                for (ep in newEpisodes) {
-                    val hlsLink = ep.audioLinks.firstOrNull { it.variant == "hls" }
-                    val duration = hlsLink?.duration ?: 0
-                    val initialStatus = if (isSubscribed && duration > 0) EpisodeStatus.APPROVED else EpisodeStatus.PENDING
+        if (pendingNoAudio.isEmpty()) return
 
-                    Episodes.insert {
-                        it[uuid] = ep.uuid
-                        it[Episodes.showUuid] = showUuid
-                        it[Episodes.serialUuid] = serialUuid
-                        it[title] = ep.title
-                        it[part] = ep.part
-                        it[seriesEpisodeNumber] = ep.seriesEpisodeNumber
-                        it[status] = initialStatus
-                        it[Episodes.hlsUrl] = hlsLink?.url
-                        it[Episodes.duration] = duration
-                        it[playableTill] = hlsLink?.playableTill
-                        it[discoveredAt] = Instant.now()
-                    }
-                    if (initialStatus == EpisodeStatus.APPROVED) {
-                        downloadQueue?.enqueue(ep.uuid)
-                    }
-                }
-            }
+        // Re-fetch episodes from API to check for audio
+        val apiEpisodes = if (serialUuid != null) {
+            api.getSerialEpisodes(serialUuid)
+        } else {
+            api.getShowEpisodes(showUuid)
+        }
+        val apiByUuid = apiEpisodes.associateBy { it.uuid }
+
+        val nowAvailable = pendingNoAudio.filter { epUuid ->
+            val apiEp = apiByUuid[epUuid] ?: return@filter false
+            val hlsLink = apiEp.audioLinks.firstOrNull { it.variant == "hls" }
+            hlsLink != null && hlsLink.duration > 0
         }
 
-        // For subscribed: check if PENDING episodes with no audio now have audio
-        if (isSubscribed && downloadQueue != null) {
-            val pendingNoAudio = transaction {
-                val query = if (serialUuid != null) {
-                    Episodes.selectAll().where {
-                        (Episodes.serialUuid eq serialUuid) and
-                                (Episodes.status eq EpisodeStatus.PENDING) and
-                                (Episodes.duration eq 0)
-                    }
-                } else {
-                    Episodes.selectAll().where {
-                        (Episodes.showUuid eq showUuid) and
-                                Episodes.serialUuid.isNull() and
-                                (Episodes.status eq EpisodeStatus.PENDING) and
-                                (Episodes.duration eq 0)
+        if (nowAvailable.isNotEmpty()) {
+            log.info("  ${nowAvailable.size} episode(s) now have audio available")
+            transaction {
+                for (epUuid in nowAvailable) {
+                    val apiEp = apiByUuid[epUuid]!!
+                    val hlsLink = apiEp.audioLinks.first { it.variant == "hls" }
+                    Episodes.update({ Episodes.uuid eq epUuid }) {
+                        it[Episodes.hlsUrl] = hlsLink.url
+                        it[Episodes.duration] = hlsLink.duration
+                        it[Episodes.playableTill] = hlsLink.playableTill
+                        it[Episodes.status] = EpisodeStatus.APPROVED
                     }
                 }
-                query.map { it[Episodes.uuid] }.toSet()
             }
-
-            if (pendingNoAudio.isNotEmpty()) {
-                val apiByUuid = apiEpisodes.associateBy { it.uuid }
-                val nowAvailable = pendingNoAudio.filter { epUuid ->
-                    val apiEp = apiByUuid[epUuid] ?: return@filter false
-                    val hlsLink = apiEp.audioLinks.firstOrNull { it.variant == "hls" }
-                    hlsLink != null && hlsLink.duration > 0
-                }
-
-                if (nowAvailable.isNotEmpty()) {
-                    log.info("  '$containerTitle': ${nowAvailable.size} episode(s) now available")
-                    transaction {
-                        for (epUuid in nowAvailable) {
-                            val apiEp = apiByUuid[epUuid]!!
-                            val hlsLink = apiEp.audioLinks.first { it.variant == "hls" }
-                            Episodes.update({ Episodes.uuid eq epUuid }) {
-                                it[Episodes.hlsUrl] = hlsLink.url
-                                it[Episodes.duration] = hlsLink.duration
-                                it[Episodes.playableTill] = hlsLink.playableTill
-                                it[Episodes.status] = EpisodeStatus.APPROVED
-                            }
-                        }
-                    }
-                    for (epUuid in nowAvailable) {
-                        downloadQueue.enqueue(epUuid)
-                    }
-                }
+            for (epUuid in nowAvailable) {
+                downloadQueue.enqueue(epUuid)
             }
         }
     }
