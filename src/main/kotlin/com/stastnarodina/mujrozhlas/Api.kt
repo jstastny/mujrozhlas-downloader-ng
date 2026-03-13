@@ -16,42 +16,75 @@ class Api(
 
     private val json = Json { ignoreUnknownKeys = true }
 
+    // --- Shows ---
+
+    fun searchShows(query: String): List<Show> {
+        val url = "$baseUrl/shows".toHttpUrl().newBuilder()
+            .addQueryParameter("filter[title][like]", query)
+            .addQueryParameter("page[limit]", "20")
+            .build()
+        val body = fetch(url.toString())
+        return json.decodeFromString<JsonApiListResponse>(body).data.map { parseShow(it) }
+    }
+
+    fun getShow(uuid: String): Show {
+        val body = fetch("$baseUrl/shows/$uuid")
+        return parseShow(json.decodeFromString<JsonApiSingleResponse>(body).data)
+    }
+
+    fun getShowEpisodes(showUuid: String): List<Episode> {
+        val url = "$baseUrl/shows/$showUuid/episodes".toHttpUrl().newBuilder()
+            .addQueryParameter("page[limit]", "10000")
+            .build()
+        val body = fetch(url.toString())
+        return json.decodeFromString<JsonApiListResponse>(body).data
+            .map { parseEpisode(it) }
+            .sortedBy { it.orderNumber }
+    }
+
+    fun getShowSerials(showUuid: String): List<Serial> {
+        val url = "$baseUrl/shows/$showUuid/serials".toHttpUrl().newBuilder()
+            .addQueryParameter("page[limit]", "100")
+            .build()
+        val body = fetch(url.toString())
+        return json.decodeFromString<JsonApiListResponse>(body).data.map { parseSerial(it) }
+    }
+
+    // --- Serials ---
+
     fun searchSerials(query: String): List<Serial> {
         val url = "$baseUrl/serials".toHttpUrl().newBuilder()
             .addQueryParameter("filter[title][like]", query)
             .addQueryParameter("page[limit]", "20")
             .build()
-
         val body = fetch(url.toString())
-        val response = json.decodeFromString<JsonApiListResponse>(body)
-        return response.data.map { parseSerial(it) }
-    }
-
-    fun getRecentEpisodes(limit: Int = 200): List<Episode> {
-        val url = "$baseUrl/episodes".toHttpUrl().newBuilder()
-            .addQueryParameter("sort", "-since")
-            .addQueryParameter("page[limit]", limit.toString())
-            .build()
-
-        val body = fetch(url.toString())
-        val response = json.decodeFromString<JsonApiListResponse>(body)
-        return response.data.map { parseEpisode(it) }
+        return json.decodeFromString<JsonApiListResponse>(body).data.map { parseSerial(it) }
     }
 
     fun getSerial(uuid: String): Serial {
         val body = fetch("$baseUrl/serials/$uuid")
-        val response = json.decodeFromString<JsonApiSingleResponse>(body)
-        return parseSerial(response.data)
+        return parseSerial(json.decodeFromString<JsonApiSingleResponse>(body).data)
     }
 
     fun getSerialEpisodes(serialUuid: String): List<Episode> {
         val url = "$baseUrl/serials/$serialUuid/episodes".toHttpUrl().newBuilder()
             .addQueryParameter("page[limit]", "10000")
             .build()
-
         val body = fetch(url.toString())
-        val response = json.decodeFromString<JsonApiListResponse>(body)
-        return response.data.map { parseEpisode(it) }.sortedBy { it.part }
+        return json.decodeFromString<JsonApiListResponse>(body).data
+            .map { parseEpisode(it) }
+            .sortedBy { it.orderNumber }
+    }
+
+    // --- Episodes ---
+
+    fun getRecentEpisodes(limit: Int = 200): List<Episode> {
+        val url = "$baseUrl/episodes".toHttpUrl().newBuilder()
+            .addQueryParameter("sort", "-since")
+            .addQueryParameter("page[limit]", limit.toString())
+            .build()
+        val body = fetch(url.toString())
+        return json.decodeFromString<JsonApiListResponse>(body).data.map { parseEpisode(it) }
     }
 
     fun searchEpisodes(query: String): List<Episode> {
@@ -59,17 +92,16 @@ class Api(
             .addQueryParameter("filter[title][like]", query)
             .addQueryParameter("page[limit]", "20")
             .build()
-
         val body = fetch(url.toString())
-        val response = json.decodeFromString<JsonApiListResponse>(body)
-        return response.data.map { parseEpisode(it) }
+        return json.decodeFromString<JsonApiListResponse>(body).data.map { parseEpisode(it) }
     }
 
     fun getEpisode(uuid: String): Episode {
         val body = fetch("$baseUrl/episodes/$uuid")
-        val response = json.decodeFromString<JsonApiSingleResponse>(body)
-        return parseEpisode(response.data)
+        return parseEpisode(json.decodeFromString<JsonApiSingleResponse>(body).data)
     }
+
+    // --- HTTP ---
 
     private fun fetch(url: String): String {
         val request = Request.Builder()
@@ -85,12 +117,32 @@ class Api(
         }
     }
 
+    // --- Parsing ---
+
+    private fun parseShow(resource: JsonApiResource): Show {
+        val attrs = json.decodeFromJsonElement<JsonObject>(resource.attributes)
+        val imageUrl = attrs["asset"]?.jsonObject?.get("url")?.jsonPrimitive?.contentOrNull
+        return Show(
+            uuid = resource.id,
+            title = attrs["title"]?.jsonPrimitive?.content ?: "",
+            imageUrl = imageUrl,
+        )
+    }
+
     private fun parseSerial(resource: JsonApiResource): Serial {
         val attrs = json.decodeFromJsonElement<JsonObject>(resource.attributes)
         val imageUrl = attrs["asset"]?.jsonObject?.get("url")?.jsonPrimitive?.contentOrNull
 
+        val showUuid = resource.relationships?.let { rels ->
+            val relsObj = json.decodeFromJsonElement<JsonObject>(rels)
+            relsObj["show"]?.jsonObject
+                ?.get("data")?.jsonObject
+                ?.get("id")?.jsonPrimitive?.contentOrNull
+        }
+
         return Serial(
             uuid = resource.id,
+            showUuid = showUuid,
             title = attrs["title"]?.jsonPrimitive?.content ?: "",
             totalParts = attrs["totalParts"]?.jsonPrimitive?.intOrNull ?: 0,
             lastEpisodeSince = attrs["lastEpisodeSince"]?.jsonPrimitive?.contentOrNull,
@@ -113,23 +165,33 @@ class Api(
             )
         }
 
-        val serialUuid = resource.relationships?.let { rels ->
-            val relsObj = json.decodeFromJsonElement<JsonObject>(rels)
-            relsObj["serial"]?.jsonObject
-                ?.get("data")?.jsonObject
-                ?.get("id")?.jsonPrimitive?.contentOrNull
+        val relsObj = resource.relationships?.let {
+            json.decodeFromJsonElement<JsonObject>(it)
         }
 
-        val mirroredSerial = attrs["mirroredSerial"]?.jsonObject
-        val serialTitle = mirroredSerial?.get("title")?.jsonPrimitive?.contentOrNull
+        val serialUuid = relsObj?.get("serial")?.jsonObject
+            ?.get("data")?.jsonObject
+            ?.get("id")?.jsonPrimitive?.contentOrNull
+
+        val showUuid = relsObj?.get("show")?.jsonObject
+            ?.get("data")?.jsonObject
+            ?.get("id")?.jsonPrimitive?.contentOrNull
+
+        val serialTitle = attrs["mirroredSerial"]?.jsonObject
+            ?.get("title")?.jsonPrimitive?.contentOrNull
+        val showTitle = attrs["mirroredShow"]?.jsonObject
+            ?.get("title")?.jsonPrimitive?.contentOrNull
 
         return Episode(
             uuid = resource.id,
             title = attrs["title"]?.jsonPrimitive?.content ?: "",
-            part = attrs["part"]?.jsonPrimitive?.intOrNull ?: 0,
+            part = attrs["part"]?.jsonPrimitive?.intOrNull,
+            seriesEpisodeNumber = attrs["series_episode_number"]?.jsonPrimitive?.intOrNull,
             audioLinks = audioLinks,
             serialUuid = serialUuid,
             serialTitle = serialTitle,
+            showUuid = showUuid,
+            showTitle = showTitle,
         )
     }
 }

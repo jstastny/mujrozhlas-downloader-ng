@@ -32,8 +32,17 @@ data class JsonApiResource(
 
 // --- Domain models ---
 
+data class Show(
+    val uuid: String,
+    val title: String,
+    val imageUrl: String? = null,
+    val serials: List<Serial> = emptyList(),
+    val episodes: List<Episode> = emptyList(),
+)
+
 data class Serial(
     val uuid: String,
+    val showUuid: String? = null,
     val title: String,
     val totalParts: Int,
     val episodes: List<Episode> = emptyList(),
@@ -44,11 +53,17 @@ data class Serial(
 data class Episode(
     val uuid: String,
     val title: String,
-    val part: Int,
+    val part: Int? = null,
+    val seriesEpisodeNumber: Int? = null,
     val audioLinks: List<AudioLink>,
     val serialUuid: String? = null,
     val serialTitle: String? = null,
-)
+    val showUuid: String? = null,
+    val showTitle: String? = null,
+) {
+    /** Effective ordering number: serial part or show episode number. */
+    val orderNumber: Int get() = part ?: seriesEpisodeNumber ?: 0
+}
 
 data class AudioLink(
     val url: String,

@@ -29,22 +29,23 @@ class Downloader {
         }
     }
 
+    /** Download all episodes of a serial, then combine into M4B. */
     fun downloadSerial(serial: Serial, outputDir: File, dryRun: Boolean) {
         val serialDir = File(outputDir, sanitizeFilename(serial.title))
-        if (!dryRun) {
-            serialDir.mkdirs()
-        }
+        if (!dryRun) serialDir.mkdirs()
 
         println("Serial: ${serial.title} (${serial.episodes.size} episodes)")
         println("Output: ${serialDir.absolutePath}")
         println()
 
+        val padWidth = digitCount(serial.episodes.size.coerceAtLeast(serial.totalParts))
         var downloaded = 0
         var skipped = 0
         val downloadedEpisodes = mutableListOf<DownloadedEpisode>()
 
         for (episode in serial.episodes) {
-            val baseName = "%02d - %s".format(episode.part, sanitizeFilename(serial.title))
+            val num = episode.orderNumber
+            val baseName = "%0${padWidth}d - %s".format(num, sanitizeFilename(serial.title))
             val m4aFile = File(serialDir, "$baseName.m4a")
 
             if (dryRun) {
@@ -66,32 +67,20 @@ class Downloader {
 
                 downloadedEpisodes.add(DownloadedEpisode(
                     title = episode.title,
-                    part = episode.part,
+                    number = num,
                     duration = hlsLink.duration,
                     m4aFile = m4aFile,
                 ))
                 downloaded++
             } catch (e: Exception) {
-                System.err.println("  SKIP ${episode.title} (part ${episode.part}): ${e.message}")
+                System.err.println("  SKIP ${episode.title} (part ${num}): ${e.message}")
                 skipped++
             }
         }
 
         if (!dryRun && downloadedEpisodes.isNotEmpty()) {
-            // Download cover image
-            val coverFile = if (serial.imageUrl != null) {
-                val file = File(serialDir, "cover.jpg")
-                try {
-                    downloadFile(serial.imageUrl, file)
-                    println("  Cover image saved")
-                    file
-                } catch (e: Exception) {
-                    System.err.println("  Cover image download failed: ${e.message}")
-                    null
-                }
-            } else null
+            val coverFile = downloadCover(serial.imageUrl, serialDir)
 
-            // Combine into M4B
             try {
                 val m4bFile = File(serialDir, "${sanitizeFilename(serial.title)}.m4b")
                 combineToM4b(downloadedEpisodes, serial.title, coverFile, m4bFile)
@@ -105,10 +94,58 @@ class Downloader {
         }
     }
 
+    /** Download all direct episodes of a show (no serial grouping). */
+    fun downloadShowEpisodes(show: Show, outputDir: File, dryRun: Boolean) {
+        val showDir = File(outputDir, sanitizeFilename(show.title))
+        if (!dryRun) showDir.mkdirs()
+
+        println("Show: ${show.title} (${show.episodes.size} episodes)")
+        println("Output: ${showDir.absolutePath}")
+        println()
+
+        val padWidth = digitCount(show.episodes.size)
+        var downloaded = 0
+        var skipped = 0
+
+        for (episode in show.episodes) {
+            val num = episode.orderNumber
+            val baseName = "%0${padWidth}d - %s".format(num, sanitizeFilename(show.title))
+            val m4aFile = File(showDir, "$baseName.m4a")
+
+            if (dryRun) {
+                val hlsLink = episode.audioLinks.firstOrNull { it.variant == "hls" }
+                val status = if (hlsLink != null && isPlayable(hlsLink)) "OK" else "UNAVAILABLE"
+                println("  [$status] $baseName")
+                continue
+            }
+
+            try {
+                val hlsLink = episode.audioLinks.firstOrNull { it.variant == "hls" }
+                    ?: throw RuntimeException("No HLS audio link for episode: ${episode.title}")
+                if (!isPlayable(hlsLink)) {
+                    throw RuntimeException("Episode expired (playable till: ${hlsLink.playableTill})")
+                }
+
+                println("  Downloading: $baseName (${hlsLink.duration}s)")
+                downloadHlsToM4a(hlsLink.url, m4aFile)
+                downloaded++
+            } catch (e: Exception) {
+                System.err.println("  SKIP ${episode.title} (#$num): ${e.message}")
+                skipped++
+            }
+        }
+
+        if (!dryRun) {
+            println()
+            println("Done: $downloaded downloaded, $skipped skipped")
+        }
+    }
+
     fun downloadSingleEpisode(episode: Episode, outputDir: File, dryRun: Boolean) {
-        val title = episode.serialTitle ?: episode.title
-        val filename = if (episode.part > 0) {
-            "%02d - %s.m4a".format(episode.part, sanitizeFilename(title))
+        val title = episode.serialTitle ?: episode.showTitle ?: episode.title
+        val num = episode.orderNumber
+        val filename = if (num > 0) {
+            "%03d - %s.m4a".format(num, sanitizeFilename(title))
         } else {
             "${sanitizeFilename(episode.title)}.m4a"
         }
@@ -167,16 +204,14 @@ class Downloader {
         coverFile: File?,
         outputFile: File,
     ) {
-        val sorted = episodes.sortedBy { it.part }
+        val sorted = episodes.sortedBy { it.number }
         val parentDir = outputFile.parentFile
 
-        // Create ffmpeg concat list
         val concatFile = File(parentDir, ".concat.txt")
         concatFile.writeText(sorted.joinToString("\n") { ep ->
             "file '${ep.m4aFile.absolutePath.replace("'", "'\\''")}'"
         })
 
-        // Create FFMETADATA with chapters
         val metadataFile = File(parentDir, ".metadata.txt")
         val metadataBuilder = StringBuilder()
         metadataBuilder.appendLine(";FFMETADATA1")
@@ -221,6 +256,19 @@ class Downloader {
         }
     }
 
+    private fun downloadCover(imageUrl: String?, targetDir: File): File? {
+        if (imageUrl == null) return null
+        val file = File(targetDir, "cover.jpg")
+        return try {
+            downloadFile(imageUrl, file)
+            println("  Cover image saved")
+            file
+        } catch (e: Exception) {
+            System.err.println("  Cover image download failed: ${e.message}")
+            null
+        }
+    }
+
     private fun runFfmpeg(vararg args: String) {
         val command = listOf("ffmpeg", "-y", "-loglevel", "error") + args.toList()
         val process = ProcessBuilder(command)
@@ -231,7 +279,6 @@ class Downloader {
         val exitCode = process.waitFor()
 
         if (exitCode != 0) {
-            // Clean up output file (last argument) on failure
             val outputPath = args.lastOrNull()
             if (outputPath != null) File(outputPath).delete()
             throw RuntimeException("ffmpeg failed (exit $exitCode): $stderr")
@@ -244,7 +291,7 @@ class Downloader {
             val expiry = OffsetDateTime.parse(till, DateTimeFormatter.ISO_OFFSET_DATE_TIME)
             OffsetDateTime.now().isBefore(expiry)
         } catch (e: Exception) {
-            true // If we can't parse the date, try anyway
+            true
         }
     }
 
@@ -256,13 +303,16 @@ class Downloader {
         fun sanitizeFilename(name: String): String {
             return name.replace(Regex("[/\\\\<>:\"|?*]"), "_").trim()
         }
+
+        /** Number of digits needed to represent [n] (minimum 2). */
+        fun digitCount(n: Int): Int = maxOf(2, n.toString().length)
     }
 }
 
 /** Represents a successfully downloaded episode, used for M4B combining. */
 data class DownloadedEpisode(
     val title: String,
-    val part: Int,
+    val number: Int,
     val duration: Int,
     val m4aFile: File,
 )

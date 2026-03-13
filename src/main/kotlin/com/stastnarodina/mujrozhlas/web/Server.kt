@@ -1,9 +1,6 @@
 package com.stastnarodina.mujrozhlas.web
 
-import com.stastnarodina.mujrozhlas.Api
-import com.stastnarodina.mujrozhlas.DownloadedEpisode
-import com.stastnarodina.mujrozhlas.Downloader
-import com.stastnarodina.mujrozhlas.Resolver
+import com.stastnarodina.mujrozhlas.*
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.engine.*
@@ -33,16 +30,15 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
     val downloader = Downloader()
     val scope = CoroutineScope(SupervisorJob())
     val downloadQueue = DownloadQueue(downloader, outputDir, scope)
-    val scanner = Scanner(api, scope, downloadQueue)
+    val discoverer = Discoverer(api, scope, downloadQueue)
     val urlSigner = UrlSigner(outputDir)
 
-    // Basic auth credentials from environment (optional — if not set, no auth)
     val authUser = System.getenv("AUTH_USER")
     val authPass = System.getenv("AUTH_PASS")
 
     downloader.checkFfmpeg()
     downloadQueue.start()
-    scanner.start()
+    discoverer.start()
 
     embeddedServer(Netty, port = port) {
         install(StatusPages) {
@@ -73,7 +69,8 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
         }
 
         routing {
-            // Public route — presigned URLs handle their own auth
+            // --- Public: presigned file downloads ---
+
             get("/dl/{path...}") {
                 val relativePath = call.parameters.getAll("path")?.joinToString("/") ?: ""
                 val expires = call.request.queryParameters["e"]
@@ -85,81 +82,150 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                     return@get
                 }
 
-                call.response.header(
-                    "Content-Disposition",
-                    "attachment; filename=\"${file.name}\""
-                )
+                call.response.header("Content-Disposition", "attachment; filename=\"${file.name}\"")
                 call.respondFile(file)
             }
 
-            // All other routes require basic auth (if configured)
+            // --- Dashboard ---
 
             get("/") {
-                val serials = transaction {
+                val shows = transaction {
                     val pendingCounts = Episodes
-                        .select(Episodes.serialUuid, Episodes.uuid.count())
+                        .select(Episodes.showUuid, Episodes.uuid.count())
                         .where { Episodes.status eq EpisodeStatus.PENDING }
-                        .groupBy(Episodes.serialUuid)
-                        .associate { it[Episodes.serialUuid] to it[Episodes.uuid.count()] }
+                        .groupBy(Episodes.showUuid)
+                        .associate { it[Episodes.showUuid] to it[Episodes.uuid.count()] }
 
                     val downloadedCounts = Episodes
-                        .select(Episodes.serialUuid, Episodes.uuid.count())
+                        .select(Episodes.showUuid, Episodes.uuid.count())
                         .where { Episodes.status eq EpisodeStatus.DOWNLOADED }
-                        .groupBy(Episodes.serialUuid)
-                        .associate { it[Episodes.serialUuid] to it[Episodes.uuid.count()] }
+                        .groupBy(Episodes.showUuid)
+                        .associate { it[Episodes.showUuid] to it[Episodes.uuid.count()] }
 
-                    Serials.selectAll()
-                        .where { (Serials.hidden eq false) }
-                        .orderBy(Serials.lastEpisodeSince, SortOrder.DESC_NULLS_LAST)
+                    val serialCounts = Serials
+                        .select(Serials.showUuid, Serials.uuid.count())
+                        .groupBy(Serials.showUuid)
+                        .associate { it[Serials.showUuid] to it[Serials.uuid.count()] }
+
+                    val episodeCounts = Episodes
+                        .select(Episodes.showUuid, Episodes.uuid.count())
+                        .groupBy(Episodes.showUuid)
+                        .associate { it[Episodes.showUuid] to it[Episodes.uuid.count()] }
+
+                    Shows.selectAll()
+                        .where { Shows.hidden eq false }
+                        .orderBy(Shows.title)
                         .map { row ->
-                            val uuid = row[Serials.uuid]
-                            val m4bPath = row[Serials.m4bPath]
-                            val m4bUrl = if (m4bPath != null) urlSigner.sign(File(m4bPath)) else null
-                            SerialRow(
+                            val uuid = row[Shows.uuid]
+                            ShowRow(
                                 uuid = uuid,
-                                title = row[Serials.title],
-                                totalParts = row[Serials.totalParts],
+                                title = row[Shows.title],
+                                serialCount = serialCounts[uuid]?.toInt() ?: 0,
+                                episodeCount = episodeCounts[uuid]?.toInt() ?: 0,
                                 pendingCount = pendingCounts[uuid]?.toInt() ?: 0,
                                 downloadedCount = downloadedCounts[uuid]?.toInt() ?: 0,
-                                lastEpisodeSince = row[Serials.lastEpisodeSince],
-                                subscribed = row[Serials.subscribed],
-                                m4bDownloadUrl = m4bUrl,
+                                subscribed = row[Shows.subscribed],
+                                imageUrl = row[Shows.imageUrl],
                             )
                         }
-                        .filter { it.pendingCount > 0 || it.downloadedCount > 0 }
+                        .filter { it.pendingCount > 0 || it.downloadedCount > 0 || it.subscribed }
                 }
 
                 call.respondHtml {
                     layout("Dashboard - mujrozhlas-dl") {
-                        dashboard(serials, scanner.isScanning)
+                        dashboard(shows, discoverer.isDiscovering)
                     }
                 }
             }
 
-            get("/serials/{uuid}") {
+            // --- Show detail ---
+
+            get("/shows/{uuid}") {
                 val uuid = call.parameters["uuid"] ?: return@get call.respond(HttpStatusCode.BadRequest)
 
-                val serial = transaction {
-                    Serials.selectAll().where { Serials.uuid eq uuid }.firstOrNull()
+                val showData = transaction {
+                    Shows.selectAll().where { Shows.uuid eq uuid }.firstOrNull()
+                } ?: return@get call.respond(HttpStatusCode.NotFound, "Show not found")
+
+                val serials = transaction {
+                    Serials.selectAll().where { Serials.showUuid eq uuid }
+                        .orderBy(Serials.title)
+                        .map { row ->
+                            val serialUuid = row[Serials.uuid]
+                            val pending = Episodes.selectAll()
+                                .where { (Episodes.serialUuid eq serialUuid) and (Episodes.status eq EpisodeStatus.PENDING) }
+                                .count().toInt()
+                            val downloaded = Episodes.selectAll()
+                                .where { (Episodes.serialUuid eq serialUuid) and (Episodes.status eq EpisodeStatus.DOWNLOADED) }
+                                .count().toInt()
+                            val m4bPath = row[Serials.m4bPath]
+                            SerialRow(
+                                uuid = serialUuid,
+                                showUuid = uuid,
+                                title = row[Serials.title],
+                                totalParts = row[Serials.totalParts],
+                                pendingCount = pending,
+                                downloadedCount = downloaded,
+                                lastEpisodeSince = row[Serials.lastEpisodeSince],
+                                m4bDownloadUrl = if (m4bPath != null) urlSigner.sign(File(m4bPath)) else null,
+                            )
+                        }
+                }
+
+                val directEpisodes = transaction {
+                    Episodes.selectAll()
+                        .where { (Episodes.showUuid eq uuid) and Episodes.serialUuid.isNull() }
+                        .orderBy(Episodes.seriesEpisodeNumber)
+                        .map { it.toEpisodeRow(urlSigner) }
+                }
+
+                val totalEpisodes = transaction {
+                    Episodes.selectAll().where { Episodes.showUuid eq uuid }.count().toInt()
+                }
+
+                val showRow = ShowRow(
+                    uuid = uuid,
+                    title = showData[Shows.title],
+                    serialCount = serials.size,
+                    episodeCount = totalEpisodes,
+                    pendingCount = serials.sumOf { it.pendingCount } + directEpisodes.count { it.status == EpisodeStatus.PENDING },
+                    downloadedCount = serials.sumOf { it.downloadedCount } + directEpisodes.count { it.status == EpisodeStatus.DOWNLOADED },
+                    subscribed = showData[Shows.subscribed],
+                    imageUrl = showData[Shows.imageUrl],
+                )
+
+                call.respondHtml {
+                    layout("${showRow.title} - mujrozhlas-dl") {
+                        showDetail(showRow, serials, directEpisodes)
+                    }
+                }
+            }
+
+            // --- Serial detail ---
+
+            get("/shows/{showUuid}/serials/{serialUuid}") {
+                val serialUuid = call.parameters["serialUuid"] ?: return@get call.respond(HttpStatusCode.BadRequest)
+
+                val serialData = transaction {
+                    Serials.selectAll().where { Serials.uuid eq serialUuid }.firstOrNull()
                 } ?: return@get call.respond(HttpStatusCode.NotFound, "Serial not found")
 
                 val episodes = transaction {
-                    Episodes.selectAll().where { Episodes.serialUuid eq uuid }
+                    Episodes.selectAll().where { Episodes.serialUuid eq serialUuid }
                         .orderBy(Episodes.part)
                         .map { it.toEpisodeRow(urlSigner) }
                 }
 
-                val m4bPath = serial[Serials.m4bPath]
-                val m4bUrl = if (m4bPath != null) urlSigner.sign(File(m4bPath)) else null
+                val m4bPath = serialData[Serials.m4bPath]
                 val serialRow = SerialRow(
-                    uuid = serial[Serials.uuid],
-                    title = serial[Serials.title],
-                    totalParts = serial[Serials.totalParts],
+                    uuid = serialData[Serials.uuid],
+                    showUuid = serialData[Serials.showUuid],
+                    title = serialData[Serials.title],
+                    totalParts = serialData[Serials.totalParts],
                     pendingCount = episodes.count { it.status == EpisodeStatus.PENDING },
                     downloadedCount = episodes.count { it.status == EpisodeStatus.DOWNLOADED },
-                    lastEpisodeSince = serial[Serials.lastEpisodeSince],
-                    subscribed = serial[Serials.subscribed],
-                    m4bDownloadUrl = m4bUrl,
+                    lastEpisodeSince = serialData[Serials.lastEpisodeSince],
+                    m4bDownloadUrl = if (m4bPath != null) urlSigner.sign(File(m4bPath)) else null,
                 )
 
                 call.respondHtml {
@@ -169,43 +235,114 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                 }
             }
 
-            post("/serials/{uuid}/hide") {
+            // --- Show actions ---
+
+            post("/shows/add") {
+                val params = call.receiveParameters()
+                val url = params["url"]
+                if (url.isNullOrBlank()) {
+                    call.respondText("<p>Please provide a URL</p>", contentType = ContentType.Text.Html)
+                    return@post
+                }
+
+                try {
+                    val resolver = Resolver(api)
+                    val result = resolver.resolve(url)
+
+                    val show = when (result) {
+                        is ResolvedResult.ShowResult -> result.show
+                        is ResolvedResult.SerialResult -> {
+                            val serial = result.serial
+                            val showUuid = serial.showUuid
+                                ?: throw RuntimeException("Serial has no parent show")
+                            val parentShow = api.getShow(showUuid)
+                            parentShow.copy(
+                                serials = listOf(serial),
+                                episodes = emptyList(),
+                            )
+                        }
+                        is ResolvedResult.EpisodeResult -> {
+                            val ep = result.episode
+                            val showUuid = ep.showUuid
+                                ?: throw RuntimeException("Episode has no parent show")
+                            val parentShow = api.getShow(showUuid)
+                            val serials = api.getShowSerials(showUuid).map { serial ->
+                                serial.copy(episodes = api.getSerialEpisodes(serial.uuid))
+                            }
+                            val allShowEpisodes = api.getShowEpisodes(showUuid)
+                            val serialEpUuids = serials.flatMap { s -> s.episodes.map { it.uuid } }.toSet()
+                            parentShow.copy(
+                                serials = serials,
+                                episodes = allShowEpisodes.filter { it.uuid !in serialEpUuids },
+                            )
+                        }
+                    }
+
+                    insertShow(show)
+
+                    val episodeCount = show.serials.sumOf { it.episodes.size } + show.episodes.size
+                    val html = createHTML().article {
+                        id = "show-${show.uuid}"
+                        attributes["class"] = "show-card"
+                        header {
+                            div {
+                                style = "display: flex; justify-content: space-between; align-items: center;"
+                                a(href = "/shows/${show.uuid}") {
+                                    strong { +show.title }
+                                }
+                                div {
+                                    span("badge badge-pending") { +"$episodeCount pending" }
+                                }
+                            }
+                        }
+                        footer {
+                            small {
+                                if (show.serials.isNotEmpty()) +"${show.serials.size} serial(s) | "
+                                +"$episodeCount episode(s) | Added manually"
+                            }
+                        }
+                    }
+                    call.respondText(html, contentType = ContentType.Text.Html)
+                } catch (e: Exception) {
+                    serverLog.error("Failed to add show from URL: $url", e)
+                    call.respondText(
+                        "<article><p>Error: ${e.message}</p></article>",
+                        contentType = ContentType.Text.Html,
+                    )
+                }
+            }
+
+            post("/shows/{uuid}/hide") {
                 val uuid = call.parameters["uuid"] ?: return@post call.respond(HttpStatusCode.BadRequest)
                 transaction {
-                    Serials.update({ Serials.uuid eq uuid }) {
-                        it[hidden] = true
-                    }
+                    Shows.update({ Shows.uuid eq uuid }) { it[hidden] = true }
                 }
                 call.respondText("", contentType = ContentType.Text.Html)
             }
 
-            post("/serials/{uuid}/subscribe") {
+            post("/shows/{uuid}/subscribe") {
                 val uuid = call.parameters["uuid"] ?: return@post call.respond(HttpStatusCode.BadRequest)
 
-                // Mark serial as subscribed
                 transaction {
-                    Serials.update({ Serials.uuid eq uuid }) {
-                        it[subscribed] = true
-                    }
+                    Shows.update({ Shows.uuid eq uuid }) { it[subscribed] = true }
                 }
 
-                // Approve all pending episodes that have audio (duration > 0)
+                // Approve all pending episodes with audio
                 val episodeUuids = transaction {
                     val uuids = Episodes.selectAll()
                         .where {
-                            (Episodes.serialUuid eq uuid) and
-                            (Episodes.status eq EpisodeStatus.PENDING) and
-                            (Episodes.duration greater 0)
+                            (Episodes.showUuid eq uuid) and
+                                    (Episodes.status eq EpisodeStatus.PENDING) and
+                                    (Episodes.duration greater 0)
                         }
                         .map { it[Episodes.uuid] }
 
                     Episodes.update({
-                        (Episodes.serialUuid eq uuid) and
-                        (Episodes.status eq EpisodeStatus.PENDING) and
-                        (Episodes.duration greater 0)
-                    }) {
-                        it[status] = EpisodeStatus.APPROVED
-                    }
+                        (Episodes.showUuid eq uuid) and
+                                (Episodes.status eq EpisodeStatus.PENDING) and
+                                (Episodes.duration greater 0)
+                    }) { it[status] = EpisodeStatus.APPROVED }
+
                     uuids
                 }
 
@@ -213,21 +350,64 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                     downloadQueue.enqueue(epUuid)
                 }
 
-                // Redirect to serial detail page
-                call.response.header("HX-Redirect", "/serials/$uuid")
+                call.response.header("HX-Redirect", "/shows/$uuid")
                 call.respondText("", contentType = ContentType.Text.Html)
             }
 
+            post("/shows/{uuid}/approve-all") {
+                val uuid = call.parameters["uuid"] ?: return@post call.respond(HttpStatusCode.BadRequest)
+
+                val episodeUuids = transaction {
+                    val uuids = Episodes.selectAll()
+                        .where {
+                            (Episodes.showUuid eq uuid) and
+                                    Episodes.serialUuid.isNull() and
+                                    (Episodes.status eq EpisodeStatus.PENDING)
+                        }
+                        .map { it[Episodes.uuid] }
+
+                    Episodes.update({
+                        (Episodes.showUuid eq uuid) and
+                                Episodes.serialUuid.isNull() and
+                                (Episodes.status eq EpisodeStatus.PENDING)
+                    }) { it[status] = EpisodeStatus.APPROVED }
+
+                    uuids
+                }
+
+                for (epUuid in episodeUuids) {
+                    downloadQueue.enqueue(epUuid)
+                }
+
+                val episodes = transaction {
+                    Episodes.selectAll()
+                        .where { (Episodes.showUuid eq uuid) and Episodes.serialUuid.isNull() }
+                        .orderBy(Episodes.seriesEpisodeNumber)
+                        .map { it.toEpisodeRow(urlSigner) }
+                }
+
+                val html = createHTML().table {
+                    id = "episode-list"
+                    thead { tr { th { +"#" }; th { +"Title" }; th { +"Duration" }; th { +"Status" }; th { +"Actions" } } }
+                    tbody { for (episode in episodes) { episodeRow(episode) } }
+                }
+                call.respondText(html, contentType = ContentType.Text.Html)
+            }
+
+            // --- Serial actions ---
+
             post("/serials/{uuid}/approve-all") {
                 val uuid = call.parameters["uuid"] ?: return@post call.respond(HttpStatusCode.BadRequest)
+
                 val episodeUuids = transaction {
                     val uuids = Episodes.selectAll()
                         .where { (Episodes.serialUuid eq uuid) and (Episodes.status eq EpisodeStatus.PENDING) }
                         .map { it[Episodes.uuid] }
 
-                    Episodes.update({ (Episodes.serialUuid eq uuid) and (Episodes.status eq EpisodeStatus.PENDING) }) {
-                        it[status] = EpisodeStatus.APPROVED
-                    }
+                    Episodes.update({
+                        (Episodes.serialUuid eq uuid) and (Episodes.status eq EpisodeStatus.PENDING)
+                    }) { it[status] = EpisodeStatus.APPROVED }
+
                     uuids
                 }
 
@@ -235,7 +415,6 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                     downloadQueue.enqueue(epUuid)
                 }
 
-                // Return updated episode table body
                 val episodes = transaction {
                     Episodes.selectAll().where { Episodes.serialUuid eq uuid }
                         .orderBy(Episodes.part)
@@ -244,20 +423,8 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
 
                 val html = createHTML().table {
                     id = "episode-list"
-                    thead {
-                        tr {
-                            th { +"#" }
-                            th { +"Title" }
-                            th { +"Duration" }
-                            th { +"Status" }
-                            th { +"Actions" }
-                        }
-                    }
-                    tbody {
-                        for (episode in episodes) {
-                            episodeRow(episode)
-                        }
-                    }
+                    thead { tr { th { +"#" }; th { +"Title" }; th { +"Duration" }; th { +"Status" }; th { +"Actions" } } }
+                    tbody { for (episode in episodes) { episodeRow(episode) } }
                 }
                 call.respondText(html, contentType = ContentType.Text.Html)
             }
@@ -277,13 +444,15 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                         .where { (Episodes.serialUuid eq uuid) and (Episodes.status eq EpisodeStatus.DOWNLOADED) }
                         .orderBy(Episodes.part)
                         .map { row ->
+                            val num = row[Episodes.part] ?: row[Episodes.seriesEpisodeNumber] ?: 0
+                            val padWidth = Downloader.digitCount(num)
                             DownloadedEpisode(
                                 title = row[Episodes.title],
-                                part = row[Episodes.part],
+                                number = num,
                                 duration = row[Episodes.duration],
-                                m4aFile = java.io.File(
-                                    java.io.File(outputDir, Downloader.sanitizeFilename(serialTitle)),
-                                    "%02d - %s.m4a".format(row[Episodes.part], Downloader.sanitizeFilename(serialTitle))
+                                m4aFile = File(
+                                    File(outputDir, Downloader.sanitizeFilename(serialTitle)),
+                                    "%0${padWidth}d - %s.m4a".format(num, Downloader.sanitizeFilename(serialTitle))
                                 ),
                             )
                         }
@@ -294,7 +463,6 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                     return@post
                 }
 
-                // Check that all m4a files exist
                 val missing = episodes.filter { !it.m4aFile.exists() }
                 if (missing.isNotEmpty()) {
                     val names = missing.joinToString(", ") { it.m4aFile.name }
@@ -303,26 +471,18 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                 }
 
                 try {
-                    val serialDir = java.io.File(outputDir, Downloader.sanitizeFilename(serialTitle))
+                    val serialDir = File(outputDir, Downloader.sanitizeFilename(serialTitle))
 
-                    // Download cover image
                     val coverFile = if (imageUrl != null) {
-                        val file = java.io.File(serialDir, "cover.jpg")
-                        try {
-                            downloader.downloadFile(imageUrl, file)
-                            file
-                        } catch (e: Exception) {
-                            serverLog.warn("Cover image download failed: ${e.message}")
-                            null
-                        }
+                        val file = File(serialDir, "cover.jpg")
+                        try { downloader.downloadFile(imageUrl, file); file }
+                        catch (e: Exception) { serverLog.warn("Cover image download failed: ${e.message}"); null }
                     } else null
 
-                    val m4bFile = java.io.File(serialDir, "${Downloader.sanitizeFilename(serialTitle)}.m4b")
+                    val m4bFile = File(serialDir, "${Downloader.sanitizeFilename(serialTitle)}.m4b")
                     downloader.combineToM4b(episodes, serialTitle, coverFile, m4bFile)
                     transaction {
-                        Serials.update({ Serials.uuid eq uuid }) {
-                            it[m4bPath] = m4bFile.absolutePath
-                        }
+                        Serials.update({ Serials.uuid eq uuid }) { it[m4bPath] = m4bFile.absolutePath }
                     }
 
                     val dlUrl = urlSigner.sign(m4bFile)
@@ -334,24 +494,21 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                 }
             }
 
+            // --- Episode actions ---
+
             post("/episodes/{uuid}/approve") {
                 val uuid = call.parameters["uuid"] ?: return@post call.respond(HttpStatusCode.BadRequest)
                 transaction {
-                    Episodes.update({ Episodes.uuid eq uuid }) {
-                        it[status] = EpisodeStatus.APPROVED
-                    }
+                    Episodes.update({ Episodes.uuid eq uuid }) { it[status] = EpisodeStatus.APPROVED }
                 }
                 downloadQueue.enqueue(uuid)
-
                 respondEpisodeRow(call, uuid, urlSigner)
             }
 
             post("/episodes/{uuid}/skip") {
                 val uuid = call.parameters["uuid"] ?: return@post call.respond(HttpStatusCode.BadRequest)
                 transaction {
-                    Episodes.update({ Episodes.uuid eq uuid }) {
-                        it[status] = EpisodeStatus.SKIPPED
-                    }
+                    Episodes.update({ Episodes.uuid eq uuid }) { it[status] = EpisodeStatus.SKIPPED }
                 }
                 respondEpisodeRow(call, uuid, urlSigner)
             }
@@ -361,38 +518,41 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                 respondEpisodeRow(call, uuid, urlSigner)
             }
 
-            post("/scan") {
-                scanner.scanNow()
+            // --- Discovery ---
+
+            post("/discover") {
+                discoverer.discoverNow()
                 val html = createHTML().span {
-                    id = "scan-status"
-                    attributes["hx-get"] = "/scan/status"
+                    id = "discover-status"
+                    attributes["hx-get"] = "/discover/status"
                     attributes["hx-trigger"] = "every 2s"
                     attributes["hx-swap"] = "outerHTML"
-                    +"Scanning..."
+                    +"Discovering..."
                     +" "
                     span { attributes["aria-busy"] = "true" }
                 }
                 call.respondText(html, contentType = ContentType.Text.Html)
             }
 
-            get("/scan/status") {
-                if (scanner.isScanning) {
+            get("/discover/status") {
+                if (discoverer.isDiscovering) {
                     val html = createHTML().span {
-                        id = "scan-status"
-                        attributes["hx-get"] = "/scan/status"
+                        id = "discover-status"
+                        attributes["hx-get"] = "/discover/status"
                         attributes["hx-trigger"] = "every 2s"
                         attributes["hx-swap"] = "outerHTML"
-                        +"Scanning..."
+                        +"Discovering..."
                         +" "
                         span { attributes["aria-busy"] = "true" }
                     }
                     call.respondText(html, contentType = ContentType.Text.Html)
                 } else {
-                    // Scan done — tell client to reload the page
                     call.response.header("HX-Refresh", "true")
                     call.respondText("", contentType = ContentType.Text.Html)
                 }
             }
+
+            // --- Downloads ---
 
             get("/downloads") {
                 val downloads = transaction {
@@ -415,107 +575,66 @@ fun startServer(port: Int, outputDir: File, dbPath: String) {
                     }
                 }
             }
-
-            post("/serials/add") {
-                val params = call.receiveParameters()
-                val url = params["url"]
-                if (url.isNullOrBlank()) {
-                    call.respondText("<p>Please provide a URL</p>", contentType = ContentType.Text.Html)
-                    return@post
-                }
-
-                try {
-                    val resolver = Resolver(api)
-                    val result = resolver.resolve(url)
-
-                    val serial = when (result) {
-                        is com.stastnarodina.mujrozhlas.ResolvedResult.SerialResult -> result.serial
-                        is com.stastnarodina.mujrozhlas.ResolvedResult.EpisodeResult -> {
-                            val ep = result.episode
-                            if (ep.serialUuid != null) {
-                                val s = api.getSerial(ep.serialUuid)
-                                val episodes = api.getSerialEpisodes(ep.serialUuid)
-                                s.copy(episodes = episodes)
-                            } else {
-                                call.respondText(
-                                    "<p>Episode does not belong to a serial</p>",
-                                    contentType = ContentType.Text.Html
-                                )
-                                return@post
-                            }
-                        }
-                    }
-
-                    // Insert serial + episodes
-                    transaction {
-                        val exists = Serials.selectAll().where { Serials.uuid eq serial.uuid }.count() > 0
-                        if (!exists) {
-                            Serials.insert {
-                                it[Serials.uuid] = serial.uuid
-                                it[title] = serial.title
-                                it[totalParts] = serial.totalParts
-                                it[lastEpisodeSince] = serial.lastEpisodeSince
-                                it[imageUrl] = serial.imageUrl
-                                it[lastScanned] = Instant.now()
-                            }
-                        }
-                        for (ep in serial.episodes) {
-                            val epExists = Episodes.selectAll().where { Episodes.uuid eq ep.uuid }.count() > 0
-                            if (!epExists) {
-                                val hlsLink = ep.audioLinks.firstOrNull { it.variant == "hls" }
-                                Episodes.insert {
-                                    it[Episodes.uuid] = ep.uuid
-                                    it[serialUuid] = serial.uuid
-                                    it[title] = ep.title
-                                    it[part] = ep.part
-                                    it[status] = EpisodeStatus.PENDING
-                                    it[hlsUrl] = hlsLink?.url
-                                    it[duration] = hlsLink?.duration ?: 0
-                                    it[playableTill] = hlsLink?.playableTill
-                                    it[discoveredAt] = Instant.now()
-                                }
-                            }
-                        }
-                    }
-
-                    val pendingCount = serial.episodes.size
-                    val serialRow = SerialRow(
-                        uuid = serial.uuid,
-                        title = serial.title,
-                        totalParts = serial.totalParts,
-                        pendingCount = pendingCount,
-                        downloadedCount = 0,
-                        lastEpisodeSince = serial.lastEpisodeSince,
-                    )
-                    val html = createHTML().article {
-                        id = "serial-${serial.uuid}"
-                        attributes["class"] = "serial-card"
-                        header {
-                            div {
-                                style = "display: flex; justify-content: space-between; align-items: center;"
-                                a(href = "/serials/${serial.uuid}") {
-                                    strong { +serial.title }
-                                }
-                                div {
-                                    span("badge badge-pending") { +"$pendingCount pending" }
-                                }
-                            }
-                        }
-                        footer {
-                            small { +"${serial.totalParts} parts total | Added manually" }
-                        }
-                    }
-                    call.respondText(html, contentType = ContentType.Text.Html)
-                } catch (e: Exception) {
-                    serverLog.error("Failed to add serial from URL: $url", e)
-                    call.respondText(
-                        "<article><p>Error: ${e.message}</p></article>",
-                        contentType = ContentType.Text.Html,
-                    )
-                }
-            }
         }
     }.start(wait = true)
+}
+
+// --- Helpers ---
+
+/** Insert a fully-populated Show (with serials and episodes) into the database. */
+private fun insertShow(show: Show) {
+    transaction {
+        val showExists = Shows.selectAll().where { Shows.uuid eq show.uuid }.count() > 0
+        if (!showExists) {
+            Shows.insert {
+                it[uuid] = show.uuid
+                it[title] = show.title
+                it[imageUrl] = show.imageUrl
+                it[lastScanned] = Instant.now()
+            }
+        }
+
+        for (serial in show.serials) {
+            val serialExists = Serials.selectAll().where { Serials.uuid eq serial.uuid }.count() > 0
+            if (!serialExists) {
+                Serials.insert {
+                    it[uuid] = serial.uuid
+                    it[showUuid] = show.uuid
+                    it[title] = serial.title
+                    it[totalParts] = serial.totalParts
+                    it[lastEpisodeSince] = serial.lastEpisodeSince
+                    it[imageUrl] = serial.imageUrl
+                }
+            }
+            for (ep in serial.episodes) {
+                insertEpisode(ep, show.uuid, serial.uuid)
+            }
+        }
+
+        for (ep in show.episodes) {
+            insertEpisode(ep, show.uuid, null)
+        }
+    }
+}
+
+private fun insertEpisode(ep: Episode, showUuid: String, serialUuid: String?) {
+    val exists = Episodes.selectAll().where { Episodes.uuid eq ep.uuid }.count() > 0
+    if (exists) return
+
+    val hlsLink = ep.audioLinks.firstOrNull { it.variant == "hls" }
+    Episodes.insert {
+        it[uuid] = ep.uuid
+        it[Episodes.showUuid] = showUuid
+        it[Episodes.serialUuid] = serialUuid
+        it[title] = ep.title
+        it[part] = ep.part
+        it[seriesEpisodeNumber] = ep.seriesEpisodeNumber
+        it[status] = EpisodeStatus.PENDING
+        it[hlsUrl] = hlsLink?.url
+        it[duration] = hlsLink?.duration ?: 0
+        it[playableTill] = hlsLink?.playableTill
+        it[discoveredAt] = Instant.now()
+    }
 }
 
 private suspend fun respondEpisodeRow(call: ApplicationCall, uuid: String, urlSigner: UrlSigner) {
@@ -528,8 +647,7 @@ private suspend fun respondEpisodeRow(call: ApplicationCall, uuid: String, urlSi
     }
     val html = createHTML().tr {
         id = "episode-${episode.uuid}"
-        // Re-render using the same structure as episodeRow but inline since we need <tr> at top level
-        td { +"${episode.part}" }
+        td { +"${episode.number}" }
         td {
             +episode.title
             episode.errorMessage?.let {
@@ -616,16 +734,16 @@ private fun ResultRow.toEpisodeRow(urlSigner: UrlSigner? = null): EpisodeRow {
     val path = this[Episodes.filePath]
     val dlUrl = if (path != null && urlSigner != null) urlSigner.sign(File(path)) else null
     return EpisodeRow(
-    uuid = this[Episodes.uuid],
-    title = this[Episodes.title],
-    part = this[Episodes.part],
-    status = this[Episodes.status],
-    duration = this[Episodes.duration],
-    playableTill = this[Episodes.playableTill],
-    discoveredAt = this[Episodes.discoveredAt],
-    downloadedAt = this[Episodes.downloadedAt],
-    filePath = this[Episodes.filePath],
-    downloadUrl = dlUrl,
-    errorMessage = this[Episodes.errorMessage],
-)
+        uuid = this[Episodes.uuid],
+        title = this[Episodes.title],
+        number = this[Episodes.part] ?: this[Episodes.seriesEpisodeNumber] ?: 0,
+        status = this[Episodes.status],
+        duration = this[Episodes.duration],
+        playableTill = this[Episodes.playableTill],
+        discoveredAt = this[Episodes.discoveredAt],
+        downloadedAt = this[Episodes.downloadedAt],
+        filePath = this[Episodes.filePath],
+        downloadUrl = dlUrl,
+        errorMessage = this[Episodes.errorMessage],
+    )
 }

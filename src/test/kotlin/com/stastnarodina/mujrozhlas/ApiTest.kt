@@ -115,4 +115,90 @@ class ApiTest {
         assertEquals(3205, ep.audioLinks[0].duration)
         assertEquals("86006a3c-b4ec-38f6-b754-565cc18cbe17", ep.serialUuid)
     }
+
+    @Test
+    fun `parseEpisode reads show relationship and series_episode_number`() {
+        server.enqueue(
+            MockResponse()
+                .setHeader("Content-Type", "application/json")
+                .setBody(
+                    """
+                    {
+                      "data": {
+                        "type": "episode",
+                        "id": "a2010787-e6d9-3b23-9ce6-3fb58bfe2568",
+                        "attributes": {
+                          "title": "571. schůzka: Ta péče o spasení...",
+                          "part": null,
+                          "series_episode_number": 571,
+                          "audioLinks": [
+                            {
+                              "url": "https://croaod.cz/stream/test.m4a/playlist.m3u8",
+                              "variant": "hls",
+                              "duration": 1615,
+                              "bitrate": 128
+                            }
+                          ],
+                          "mirroredShow": {
+                            "title": "Toulky českou minulostí"
+                          }
+                        },
+                        "relationships": {
+                          "show": {
+                            "data": {
+                              "type": "show",
+                              "id": "97e4e533-1cf0-3bbb-8026-c3e22ff82ad0"
+                            }
+                          },
+                          "serial": {}
+                        }
+                      }
+                    }
+                    """.trimIndent()
+                )
+        )
+
+        val ep = api.getEpisode("a2010787-e6d9-3b23-9ce6-3fb58bfe2568")
+        assertEquals(null, ep.part)
+        assertEquals(571, ep.seriesEpisodeNumber)
+        assertEquals(571, ep.orderNumber)
+        assertEquals("97e4e533-1cf0-3bbb-8026-c3e22ff82ad0", ep.showUuid)
+        assertEquals("Toulky českou minulostí", ep.showTitle)
+        assertEquals(null, ep.serialUuid)
+        assertEquals(null, ep.serialTitle)
+    }
+
+    @Test
+    fun `searchShows parses show response`() {
+        server.enqueue(
+            MockResponse()
+                .setHeader("Content-Type", "application/json")
+                .setBody(
+                    """
+                    {
+                      "data": [
+                        {
+                          "type": "show",
+                          "id": "97e4e533-1cf0-3bbb-8026-c3e22ff82ad0",
+                          "attributes": {
+                            "title": "Toulky českou minulostí",
+                            "asset": {
+                              "url": "https://portal.rozhlas.cz/images/toulky.jpeg"
+                            }
+                          },
+                          "relationships": {}
+                        }
+                      ],
+                      "meta": { "count": 1 }
+                    }
+                    """.trimIndent()
+                )
+        )
+
+        val shows = api.searchShows("toulky ceskou minulosti")
+        assertEquals(1, shows.size)
+        assertEquals("Toulky českou minulostí", shows[0].title)
+        assertEquals("97e4e533-1cf0-3bbb-8026-c3e22ff82ad0", shows[0].uuid)
+        assertEquals("https://portal.rozhlas.cz/images/toulky.jpeg", shows[0].imageUrl)
+    }
 }

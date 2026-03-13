@@ -7,21 +7,32 @@ import java.time.format.DateTimeFormatter
 
 // --- View data classes ---
 
+data class ShowRow(
+    val uuid: String,
+    val title: String,
+    val serialCount: Int,
+    val episodeCount: Int,
+    val pendingCount: Int,
+    val downloadedCount: Int,
+    val subscribed: Boolean = false,
+    val imageUrl: String? = null,
+)
+
 data class SerialRow(
     val uuid: String,
+    val showUuid: String,
     val title: String,
     val totalParts: Int,
     val pendingCount: Int,
     val downloadedCount: Int,
     val lastEpisodeSince: String?,
-    val subscribed: Boolean = false,
     val m4bDownloadUrl: String? = null,
 )
 
 data class EpisodeRow(
     val uuid: String,
     val title: String,
-    val part: Int,
+    val number: Int,
     val status: EpisodeStatus,
     val duration: Int,
     val playableTill: String?,
@@ -67,7 +78,8 @@ fun HTML.layout(pageTitle: String, content: MAIN.() -> Unit) {
                 .badge-skipped { background: #6c757d; color: #fff; }
                 .badge-error { background: #dc3545; color: #fff; }
                 .badge-subscribed { background: #6f42c1; color: #fff; }
-                .serial-card { margin-bottom: 1rem; }
+                .show-card { margin-bottom: 1rem; }
+                .serial-card { margin-bottom: 0.5rem; padding: 0.5rem 1rem; background: var(--pico-card-sectioning-background-color); border-radius: 4px; }
                 nav ul li { padding: 0 0.5rem; }
                 .htmx-indicator { display: none; }
                 .htmx-request .htmx-indicator { display: inline; }
@@ -96,61 +108,61 @@ fun HTML.layout(pageTitle: String, content: MAIN.() -> Unit) {
 
 // --- Dashboard ---
 
-fun MAIN.dashboard(serials: List<SerialRow>, isScanning: Boolean) {
+fun MAIN.dashboard(shows: List<ShowRow>, isDiscovering: Boolean) {
     div {
         style = "display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;"
         h1 { +"Dashboard" }
         div {
-            if (isScanning) {
+            if (isDiscovering) {
                 span {
-                    id = "scan-status"
-                    attributes["hx-get"] = "/scan/status"
+                    id = "discover-status"
+                    attributes["hx-get"] = "/discover/status"
                     attributes["hx-trigger"] = "every 2s"
                     attributes["hx-swap"] = "outerHTML"
-                    +"Scanning..."
+                    +"Discovering..."
                     span { attributes["aria-busy"] = "true" }
                 }
             } else {
                 button {
-                    attributes["hx-post"] = "/scan"
-                    attributes["hx-target"] = "#scan-status"
+                    attributes["hx-post"] = "/discover"
+                    attributes["hx-target"] = "#discover-status"
                     attributes["hx-swap"] = "outerHTML"
-                    +"Scan Now"
+                    +"Discover Now"
                 }
-                span { id = "scan-status" }
+                span { id = "discover-status" }
             }
         }
     }
 
-    // Manual URL input
+    // URL input
     form {
-        attributes["hx-post"] = "/serials/add"
-        attributes["hx-target"] = "#serial-list"
+        attributes["hx-post"] = "/shows/add"
+        attributes["hx-target"] = "#show-list"
         attributes["hx-swap"] = "afterbegin"
         role = "group"
         input {
             type = InputType.url
             name = "url"
-            placeholder = "Paste mujrozhlas.cz URL to add manually..."
+            placeholder = "Paste mujrozhlas.cz URL to add a show..."
         }
         button { type = ButtonType.submit; +"Add" }
     }
 
     input {
         type = InputType.search
-        id = "serial-search"
-        placeholder = "Filter serials..."
-        attributes["oninput"] = "filterSerials(this.value)"
+        id = "show-search"
+        placeholder = "Filter shows..."
+        attributes["oninput"] = "filterShows(this.value)"
         style = "margin-bottom: 1rem;"
     }
 
     div {
-        id = "serial-list"
-        if (serials.isEmpty()) {
-            p { +"No serials with pending episodes. Click 'Scan Now' to check for new content." }
+        id = "show-list"
+        if (shows.isEmpty()) {
+            p { +"No shows tracked yet. Add a show URL above or click 'Discover Now'." }
         } else {
-            for (serial in serials) {
-                serialCard(serial)
+            for (show in shows) {
+                showCard(show)
             }
         }
     }
@@ -161,9 +173,9 @@ fun MAIN.dashboard(serials: List<SerialRow>, isScanning: Boolean) {
             function normalize(s) {
                 return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
             }
-            function filterSerials(query) {
+            function filterShows(query) {
                 var q = normalize(query);
-                document.querySelectorAll('#serial-list .serial-card').forEach(function(card) {
+                document.querySelectorAll('#show-list .show-card').forEach(function(card) {
                     var title = normalize(card.textContent);
                     card.style.display = title.includes(q) ? '' : 'none';
                 });
@@ -173,43 +185,43 @@ fun MAIN.dashboard(serials: List<SerialRow>, isScanning: Boolean) {
     }
 }
 
-fun FlowContent.serialCard(serial: SerialRow) {
+fun FlowContent.showCard(show: ShowRow) {
     article {
-        id = "serial-${serial.uuid}"
-        attributes["class"] = "serial-card"
+        id = "show-${show.uuid}"
+        attributes["class"] = "show-card"
         header {
             div {
                 style = "display: flex; justify-content: space-between; align-items: center;"
-                a(href = "/serials/${serial.uuid}") {
-                    strong { +serial.title }
+                a(href = "/shows/${show.uuid}") {
+                    strong { +show.title }
                 }
                 div {
-                    if (serial.subscribed) {
+                    if (show.subscribed) {
                         span("badge badge-subscribed") { +"subscribed" }
                         +" "
                     }
-                    if (serial.pendingCount > 0) {
-                        span("badge badge-pending") { +"${serial.pendingCount} pending" }
+                    if (show.pendingCount > 0) {
+                        span("badge badge-pending") { +"${show.pendingCount} pending" }
                         +" "
                     }
-                    if (serial.downloadedCount > 0) {
-                        span("badge badge-downloaded") { +"${serial.downloadedCount} downloaded" }
+                    if (show.downloadedCount > 0) {
+                        span("badge badge-downloaded") { +"${show.downloadedCount} downloaded" }
                         +" "
                     }
-                    if (!serial.subscribed) {
+                    if (!show.subscribed) {
                         button {
                             attributes["class"] = "outline"
-                            attributes["hx-post"] = "/serials/${serial.uuid}/subscribe"
+                            attributes["hx-post"] = "/shows/${show.uuid}/subscribe"
                             style = "margin-left: 0.5rem; padding: 4px 12px; font-size: 0.85em;"
-                            +"Download Series"
+                            +"Subscribe"
                         }
                     }
                     button {
                         attributes["class"] = "outline secondary"
-                        attributes["hx-post"] = "/serials/${serial.uuid}/hide"
-                        attributes["hx-target"] = "#serial-${serial.uuid}"
+                        attributes["hx-post"] = "/shows/${show.uuid}/hide"
+                        attributes["hx-target"] = "#show-${show.uuid}"
                         attributes["hx-swap"] = "outerHTML"
-                        attributes["hx-confirm"] = "Hide '${serial.title}' from dashboard?"
+                        attributes["hx-confirm"] = "Hide '${show.title}' from dashboard?"
                         style = "margin-left: 0.5rem; padding: 4px 12px; font-size: 0.85em;"
                         +"Hide"
                     }
@@ -218,17 +230,87 @@ fun FlowContent.serialCard(serial: SerialRow) {
         }
         footer {
             small {
-                +"${serial.totalParts} parts total"
-                serial.lastEpisodeSince?.let { +" | Last episode: $it" }
+                if (show.serialCount > 0) +"${show.serialCount} serial(s) | "
+                +"${show.episodeCount} episode(s)"
             }
-            serial.m4bDownloadUrl?.let { url ->
-                +" "
-                a(href = url) {
-                    attributes["download"] = ""
-                    small { +"M4B" }
+        }
+    }
+}
+
+// --- Show detail ---
+
+fun MAIN.showDetail(
+    show: ShowRow,
+    serials: List<SerialRow>,
+    directEpisodes: List<EpisodeRow>,
+) {
+    div {
+        style = "display: flex; justify-content: space-between; align-items: center;"
+        h1 { +show.title }
+        div {
+            if (!show.subscribed) {
+                button {
+                    attributes["hx-post"] = "/shows/${show.uuid}/subscribe"
+                    style = "margin-right: 0.5rem;"
+                    +"Subscribe"
+                }
+            } else {
+                span("badge badge-subscribed") { +"subscribed" }
+            }
+        }
+    }
+
+    // Serials section
+    if (serials.isNotEmpty()) {
+        h2 { +"Serials" }
+        for (serial in serials) {
+            div {
+                attributes["class"] = "serial-card"
+                div {
+                    style = "display: flex; justify-content: space-between; align-items: center;"
+                    a(href = "/shows/${show.uuid}/serials/${serial.uuid}") {
+                        strong { +serial.title }
+                    }
+                    div {
+                        if (serial.pendingCount > 0) {
+                            span("badge badge-pending") { +"${serial.pendingCount} pending" }
+                            +" "
+                        }
+                        if (serial.downloadedCount > 0) {
+                            span("badge badge-downloaded") { +"${serial.downloadedCount} downloaded" }
+                            +" "
+                        }
+                        serial.m4bDownloadUrl?.let { url ->
+                            a(href = url) { attributes["download"] = ""; +"M4B" }
+                        }
+                    }
+                }
+                small {
+                    +"${serial.totalParts} parts"
+                    serial.lastEpisodeSince?.let { +" | Last: $it" }
                 }
             }
         }
+    }
+
+    // Direct episodes section
+    if (directEpisodes.isNotEmpty()) {
+        h2 { +"Episodes" }
+        val pendingCount = directEpisodes.count { it.status == EpisodeStatus.PENDING }
+        if (pendingCount > 0) {
+            button {
+                attributes["class"] = "outline"
+                attributes["hx-post"] = "/shows/${show.uuid}/approve-all"
+                attributes["hx-target"] = "#episode-list"
+                attributes["hx-swap"] = "innerHTML"
+                +"Approve All ($pendingCount)"
+            }
+        }
+        episodeTable(directEpisodes)
+    }
+
+    if (serials.isEmpty() && directEpisodes.isEmpty()) {
+        p { +"No content found for this show." }
     }
 }
 
@@ -239,7 +321,6 @@ fun MAIN.serialDetail(serial: SerialRow, episodes: List<EpisodeRow>) {
         style = "display: flex; justify-content: space-between; align-items: center;"
         h1 { +serial.title }
         div {
-            val pendingCount = episodes.count { it.status == EpisodeStatus.PENDING }
             val downloadedCount = episodes.count { it.status == EpisodeStatus.DOWNLOADED }
             if (downloadedCount > 0) {
                 span {
@@ -254,13 +335,7 @@ fun MAIN.serialDetail(serial: SerialRow, episodes: List<EpisodeRow>) {
                     }
                 }
             }
-            if (!serial.subscribed && pendingCount > 0) {
-                button {
-                    attributes["hx-post"] = "/serials/${serial.uuid}/subscribe"
-                    style = "margin-right: 0.5rem;"
-                    +"Download Series"
-                }
-            }
+            val pendingCount = episodes.count { it.status == EpisodeStatus.PENDING }
             if (pendingCount > 0) {
                 button {
                     attributes["class"] = "outline"
@@ -275,7 +350,6 @@ fun MAIN.serialDetail(serial: SerialRow, episodes: List<EpisodeRow>) {
 
     p {
         +"${serial.totalParts} parts total"
-        if (serial.subscribed) +" | Subscribed"
         serial.lastEpisodeSince?.let { +" | Last episode: $it" }
         serial.m4bDownloadUrl?.let { url ->
             +" | "
@@ -283,6 +357,12 @@ fun MAIN.serialDetail(serial: SerialRow, episodes: List<EpisodeRow>) {
         }
     }
 
+    episodeTable(episodes)
+}
+
+// --- Shared episode table ---
+
+fun FlowContent.episodeTable(episodes: List<EpisodeRow>) {
     table {
         id = "episode-list"
         thead {
@@ -305,7 +385,7 @@ fun MAIN.serialDetail(serial: SerialRow, episodes: List<EpisodeRow>) {
 fun TBODY.episodeRow(episode: EpisodeRow) {
     tr {
         id = "episode-${episode.uuid}"
-        td { +"${episode.part}" }
+        td { +"${episode.number}" }
         td {
             +episode.title
             episode.errorMessage?.let {

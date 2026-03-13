@@ -30,6 +30,34 @@ class ResolverTest {
     }
 
     @Test
+    fun `parseUrlSegments extracts all path segments`() {
+        val segments = Resolver.parseUrlSegments(
+            "https://www.mujrozhlas.cz/toulky-ceskou-minulosti/571-schuzka-ta-pece"
+        )
+        assertEquals(2, segments.size)
+        assertEquals("toulky-ceskou-minulosti", segments[0])
+        assertEquals("571-schuzka-ta-pece", segments[1])
+    }
+
+    @Test
+    fun `parseUrlSegments handles show URL with single segment`() {
+        val segments = Resolver.parseUrlSegments(
+            "https://www.mujrozhlas.cz/toulky-ceskou-minulosti"
+        )
+        assertEquals(1, segments.size)
+        assertEquals("toulky-ceskou-minulosti", segments[0])
+    }
+
+    @Test
+    fun `parseUrlSegments handles trailing slash`() {
+        val segments = Resolver.parseUrlSegments(
+            "https://www.mujrozhlas.cz/toulky-ceskou-minulosti/"
+        )
+        assertEquals(1, segments.size)
+        assertEquals("toulky-ceskou-minulosti", segments[0])
+    }
+
+    @Test
     fun `slugToSearchQueries generates progressive windows`() {
         val queries = Resolver.slugToSearchQueries("umberto-eco-foucaultovo-kyvadlo")
         // Full 4-word query first
@@ -82,5 +110,14 @@ class ResolverTest {
         )
         // "eco" and "kyvadlo" overlap = 2/3
         assertEquals(2.0 / 3.0, score, 0.01)
+    }
+
+    @Test
+    fun `scoreMatch works for show slug matching`() {
+        val score = Resolver.scoreMatch(
+            "toulky-ceskou-minulosti",
+            "Toulky českou minulostí"
+        )
+        assertEquals(1.0, score)
     }
 }

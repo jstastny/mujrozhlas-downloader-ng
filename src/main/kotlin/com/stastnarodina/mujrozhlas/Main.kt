@@ -20,7 +20,7 @@ class MujRozhlasDl : CliktCommand(
 class Download : CliktCommand(
     name = "download",
 ) {
-    private val url by argument(help = "URL from mujrozhlas.cz (serial or episode)")
+    private val url by argument(help = "URL from mujrozhlas.cz (show, serial, or episode)")
     private val outputDir by option("-o", "--output", help = "Output directory").default(".")
     private val dryRun by option("--dry-run", help = "Show what would be downloaded").flag()
 
@@ -39,16 +39,37 @@ class Download : CliktCommand(
         }
 
         when (val result = resolver.resolve(url)) {
+            is ResolvedResult.ShowResult -> {
+                val show = result.show
+                println("Show: ${show.title}")
+
+                // Download each serial as a group
+                for (serial in show.serials) {
+                    println("\nSerial: ${serial.title} (${serial.episodes.size} episodes)")
+                    downloader.downloadSerial(serial, outDir, dryRun)
+                }
+
+                // Download direct episodes
+                if (show.episodes.isNotEmpty()) {
+                    println("\nDirect episodes: ${show.episodes.size}")
+                    downloader.downloadShowEpisodes(show, outDir, dryRun)
+                }
+            }
             is ResolvedResult.SerialResult -> {
                 downloader.downloadSerial(result.serial, outDir, dryRun)
             }
             is ResolvedResult.EpisodeResult -> {
                 val episode = result.episode
                 if (episode.serialUuid != null) {
-                    println("Episode belongs to a serial, fetching all episodes...")
+                    println("Episode belongs to serial '${episode.serialTitle}', fetching all episodes...")
                     val serial = api.getSerial(episode.serialUuid)
                     val episodes = api.getSerialEpisodes(episode.serialUuid)
                     downloader.downloadSerial(serial.copy(episodes = episodes), outDir, dryRun)
+                } else if (episode.showUuid != null) {
+                    println("Episode belongs to show '${episode.showTitle}', fetching all episodes...")
+                    val show = api.getShow(episode.showUuid)
+                    val episodes = api.getShowEpisodes(episode.showUuid)
+                    downloader.downloadShowEpisodes(show.copy(episodes = episodes), outDir, dryRun)
                 } else {
                     downloader.downloadSingleEpisode(episode, outDir, dryRun)
                 }

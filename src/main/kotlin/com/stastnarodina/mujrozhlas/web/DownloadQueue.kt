@@ -74,20 +74,30 @@ class DownloadQueue(
             return
         }
 
-        // Get serial title for directory
-        val serialTitle = transaction {
-            Serials.selectAll().where { Serials.uuid eq episodeData[Episodes.serialUuid] }
-                .firstOrNull()?.get(Serials.title) ?: "Unknown"
-        }
+        // Determine container title and episode number for filename
+        val serialUuid = episodeData[Episodes.serialUuid]
+        val containerTitle = if (serialUuid != null) {
+            transaction {
+                Serials.selectAll().where { Serials.uuid eq serialUuid }
+                    .firstOrNull()?.get(Serials.title)
+            }
+        } else {
+            null
+        } ?: transaction {
+            Shows.selectAll().where { Shows.uuid eq episodeData[Episodes.showUuid] }
+                .firstOrNull()?.get(Shows.title)
+        } ?: "Unknown"
 
-        val serialDir = File(outputDir, Downloader.sanitizeFilename(serialTitle))
-        serialDir.mkdirs()
+        val episodeNumber = episodeData[Episodes.part]
+            ?: episodeData[Episodes.seriesEpisodeNumber]
+            ?: 0
 
-        val baseName = "%02d - %s".format(
-            episodeData[Episodes.part],
-            Downloader.sanitizeFilename(serialTitle)
-        )
-        val m4aFile = File(serialDir, "$baseName.m4a")
+        val containerDir = File(outputDir, Downloader.sanitizeFilename(containerTitle))
+        containerDir.mkdirs()
+
+        val padWidth = Downloader.digitCount(episodeNumber)
+        val baseName = "%0${padWidth}d - %s".format(episodeNumber, Downloader.sanitizeFilename(containerTitle))
+        val m4aFile = File(containerDir, "$baseName.m4a")
 
         transaction {
             Episodes.update({ Episodes.uuid eq episodeUuid }) {
@@ -109,8 +119,10 @@ class DownloadQueue(
             }
             log.info("Downloaded: ${episodeData[Episodes.title]}")
 
-            // Auto-create M4B for subscribed serials
-            tryCreateM4b(episodeData[Episodes.serialUuid])
+            // Auto-create M4B for subscribed shows (serial episodes only)
+            if (serialUuid != null) {
+                tryCreateM4b(serialUuid)
+            }
         } catch (e: Exception) {
             log.error("Download failed for ${episodeData[Episodes.title]}: ${e.message}")
             transaction {
@@ -129,7 +141,13 @@ class DownloadQueue(
             Serials.selectAll().where { Serials.uuid eq serialUuid }.firstOrNull()
         } ?: return
 
-        if (!serialData[Serials.subscribed]) return
+        // Check if the parent show is subscribed
+        val showUuid = serialData[Serials.showUuid]
+        val isSubscribed = transaction {
+            Shows.selectAll().where { Shows.uuid eq showUuid }
+                .firstOrNull()?.get(Shows.subscribed) ?: false
+        }
+        if (!isSubscribed) return
 
         val serialTitle = serialData[Serials.title]
         val imageUrl = serialData[Serials.imageUrl]
@@ -140,12 +158,14 @@ class DownloadQueue(
                 .where { (Episodes.serialUuid eq serialUuid) and (Episodes.status eq EpisodeStatus.DOWNLOADED) }
                 .orderBy(Episodes.part)
                 .map { row ->
+                    val num = row[Episodes.part] ?: row[Episodes.seriesEpisodeNumber] ?: 0
+                    val padWidth = Downloader.digitCount(num)
                     DownloadedEpisode(
                         title = row[Episodes.title],
-                        part = row[Episodes.part],
+                        number = num,
                         duration = row[Episodes.duration],
-                        m4aFile = File(serialDir, "%02d - %s.m4a".format(
-                            row[Episodes.part], Downloader.sanitizeFilename(serialTitle)
+                        m4aFile = File(serialDir, "%0${padWidth}d - %s.m4a".format(
+                            num, Downloader.sanitizeFilename(serialTitle)
                         )),
                     )
                 }
@@ -160,7 +180,6 @@ class DownloadQueue(
         }
 
         try {
-            // Download cover image
             val coverFile = if (imageUrl != null) {
                 val file = File(serialDir, "cover.jpg")
                 try {
